@@ -424,7 +424,37 @@ function syncmaster_collect_color_size_map($colors, $selected_colors = array()) 
     return $map;
 }
 
-function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $color_taxonomy, $size_taxonomy) {
+function syncmaster_collect_color_size_sku_map($colors, $selected_colors = array()) {
+    $map = array();
+    foreach ($colors as $color) {
+        $color_name = $color['colorName'] ?? '';
+        $color_name = sanitize_text_field($color_name);
+        if ($color_name === '') {
+            continue;
+        }
+        if (!empty($selected_colors) && !in_array($color_name, $selected_colors, true)) {
+            continue;
+        }
+        $size_skus = array();
+        $raw_size_skus = $color['sizeSkus'] ?? array();
+        if (is_array($raw_size_skus)) {
+            foreach ($raw_size_skus as $size_name => $size_sku) {
+                $size_name = sanitize_text_field($size_name);
+                $size_sku = sanitize_text_field($size_sku);
+                if ($size_name !== '' && $size_sku !== '') {
+                    $size_skus[$size_name] = $size_sku;
+                }
+            }
+        }
+        if (!empty($size_skus)) {
+            $map[$color_name] = $size_skus;
+        }
+    }
+
+    return $map;
+}
+
+function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $color_size_sku_map, $color_taxonomy, $size_taxonomy) {
     if (empty($color_size_map)) {
         return;
     }
@@ -454,13 +484,18 @@ function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $co
                 $color_taxonomy => $color_slug,
                 $size_taxonomy => $size_slug,
             ));
-            $variation_sku_parts = array_filter(array(
-                $base_sku,
-                $color_slug,
-                $size_slug,
-            ));
-            if (!empty($variation_sku_parts)) {
-                $variation->set_sku(implode('-', $variation_sku_parts));
+            $variation_sku = $color_size_sku_map[$color_name][$size_name] ?? '';
+            if ($variation_sku !== '') {
+                $variation->set_sku($variation_sku);
+            } else {
+                $variation_sku_parts = array_filter(array(
+                    $base_sku,
+                    $color_slug,
+                    $size_slug,
+                ));
+                if (!empty($variation_sku_parts)) {
+                    $variation->set_sku(implode('-', $variation_sku_parts));
+                }
             }
             $variation->set_status('publish');
             $variation->save();
@@ -545,6 +580,7 @@ function syncmaster_sync_monitored_products() {
         $selected_colors = $color_selections[$sku] ?? array();
         $color_term_ids = syncmaster_resolve_color_term_ids($colors, $selected_colors);
         $color_size_map = syncmaster_collect_color_size_map($colors, $selected_colors);
+        $color_size_sku_map = syncmaster_collect_color_size_sku_map($colors, $selected_colors);
         $size_names = syncmaster_collect_size_names($colors, $selected_colors);
         $size_term_ids = syncmaster_resolve_attribute_term_ids($size_names, $size_taxonomy);
         $is_variable = count($color_term_ids) > 1 || count($size_term_ids) > 1;
@@ -587,7 +623,7 @@ function syncmaster_sync_monitored_products() {
                 syncmaster_set_featured_image($saved_id, $mapped['image']);
             }
             if ($is_variable) {
-                syncmaster_sync_variations($saved_id, $desired_sku, $color_size_map, $color_taxonomy, $size_taxonomy);
+                syncmaster_sync_variations($saved_id, $desired_sku, $color_size_map, $color_size_sku_map, $color_taxonomy, $size_taxonomy);
             }
         }
 
@@ -807,11 +843,16 @@ function syncmaster_get_style_colors($style_title) {
                         'colorName' => $item['colorName'] ?? '',
                         'colorFrontImage' => $item['colorFrontImage'] ?? '',
                         'sizeNames' => array(),
+                        'sizeSkus' => array(),
                     );
                 }
                 $size_name = sanitize_text_field($item['sizeName'] ?? '');
                 if ($size_name !== '') {
                     $colors[$color_code]['sizeNames'][] = $size_name;
+                }
+                $size_sku = sanitize_text_field($item['sku'] ?? '');
+                if ($size_name !== '' && $size_sku !== '') {
+                    $colors[$color_code]['sizeSkus'][$size_name] = $size_sku;
                 }
             }
         }
@@ -821,6 +862,10 @@ function syncmaster_get_style_colors($style_title) {
         $size_names = $color_data['sizeNames'] ?? array();
         if (!empty($size_names)) {
             $colors[$color_code]['sizeNames'] = array_values(array_unique($size_names));
+        }
+        $size_skus = $color_data['sizeSkus'] ?? array();
+        if (!empty($size_skus)) {
+            $colors[$color_code]['sizeSkus'] = array_filter($size_skus, 'strlen');
         }
     }
 
