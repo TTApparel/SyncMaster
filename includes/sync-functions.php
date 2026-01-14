@@ -12,6 +12,33 @@ function syncmaster_get_settings() {
     );
 }
 
+function syncmaster_get_color_selections() {
+    $stored = get_option('syncmaster_color_selections', array());
+    if (!is_array($stored)) {
+        return array();
+    }
+
+    $sanitized = array();
+    foreach ($stored as $sku => $colors) {
+        $sku = sanitize_text_field($sku);
+        if ($sku === '') {
+            continue;
+        }
+        $color_list = array();
+        if (is_array($colors)) {
+            foreach ($colors as $color) {
+                $color = sanitize_text_field($color);
+                if ($color !== '') {
+                    $color_list[] = $color;
+                }
+            }
+        }
+        $sanitized[$sku] = array_values(array_unique($color_list));
+    }
+
+    return $sanitized;
+}
+
 function syncmaster_handle_save_settings() {
     if (!current_user_can('manage_options')) {
         wp_die(__('Unauthorized', 'syncmaster'));
