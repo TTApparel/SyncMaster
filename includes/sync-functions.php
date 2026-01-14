@@ -161,6 +161,35 @@ function syncmaster_apply_product_brand($product_id, $product, $brand_name) {
     $product->set_attributes($attributes);
 }
 
+function syncmaster_apply_color_attributes($product, $colors, $is_variable) {
+    if (empty($colors)) {
+        return;
+    }
+
+    $color_names = array();
+    foreach ($colors as $color) {
+        $name = is_array($color) ? ($color['colorName'] ?? '') : $color;
+        $name = is_string($name) ? trim($name) : '';
+        if ($name !== '') {
+            $color_names[] = $name;
+        }
+    }
+
+    $color_names = array_values(array_unique($color_names));
+    if (empty($color_names)) {
+        return;
+    }
+
+    $attributes = $product->get_attributes();
+    $attribute = new WC_Product_Attribute();
+    $attribute->set_name(__('Color', 'syncmaster'));
+    $attribute->set_options($color_names);
+    $attribute->set_visible(true);
+    $attribute->set_variation($is_variable);
+    $attributes['color'] = $attribute;
+    $product->set_attributes($attributes);
+}
+
 function syncmaster_set_product_category($product_id, $category_name) {
     if ($category_name === '') {
         return;
@@ -230,7 +259,14 @@ function syncmaster_sync_monitored_products() {
         }
         $mapped = syncmaster_map_product_data($api_item);
         $product_id = wc_get_product_id_by_sku($sku);
-        $product = $product_id ? wc_get_product($product_id) : new WC_Product_Simple();
+        $style_title = trim(($api_item['brandName'] ?? '') . ' ' . ($api_item['styleName'] ?? ''));
+        $colors = $style_title !== '' ? syncmaster_get_style_colors($style_title) : array();
+        $is_variable = count($colors) > 1;
+        if ($product_id) {
+            $product = $is_variable ? new WC_Product_Variable($product_id) : new WC_Product_Simple($product_id);
+        } else {
+            $product = $is_variable ? new WC_Product_Variable() : new WC_Product_Simple();
+        }
 
         if (!$product) {
             $fail++;
@@ -252,6 +288,7 @@ function syncmaster_sync_monitored_products() {
             $product->set_description($mapped['description']);
         }
         $product->set_status('publish');
+        syncmaster_apply_color_attributes($product, $colors, $is_variable);
         $saved_id = $product->save();
 
         if ($saved_id) {
