@@ -165,6 +165,33 @@
     gap: 16px;
 }
 
+.syncmaster-monitored-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.syncmaster-margin-form {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.syncmaster-margin-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.syncmaster-margin-form input[type="number"] {
+    width: 120px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid #cbd5f5;
+}
+
 .syncmaster-color-panel {
     background: #f8fafc;
     border-radius: 12px;
