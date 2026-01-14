@@ -161,6 +161,126 @@ function syncmaster_apply_product_brand($product_id, $product, $brand_name) {
     $product->set_attributes($attributes);
 }
 
+function syncmaster_get_color_selections() {
+    $selections = get_option('syncmaster_color_selections', array());
+    return is_array($selections) ? $selections : array();
+}
+
+function syncmaster_get_selected_colors($sku, $colors) {
+    $selections = syncmaster_get_color_selections();
+    if (!array_key_exists($sku, $selections)) {
+        return $colors;
+    }
+
+    $stored = $selections[$sku];
+    if (!is_array($stored)) {
+        return $colors;
+    }
+
+    $allowed = array_map('strval', $stored);
+    $filtered = array();
+    foreach ($colors as $color) {
+        $name = $color['colorName'] ?? '';
+        if ($name !== '' && in_array($name, $allowed, true)) {
+            $filtered[] = $color;
+        }
+    }
+
+    return $filtered;
+}
+
+function syncmaster_apply_color_attributes($product, $colors, $is_variable) {
+    if (empty($colors)) {
+        return;
+    }
+
+    $color_names = array();
+    foreach ($colors as $color) {
+        $name = is_array($color) ? ($color['colorName'] ?? '') : $color;
+        $name = is_string($name) ? trim($name) : '';
+        if ($name !== '') {
+            $color_names[] = $name;
+        }
+    }
+
+    $color_names = array_values(array_unique($color_names));
+    if (empty($color_names)) {
+        return;
+    }
+
+    $attributes = $product->get_attributes();
+    $taxonomy = wc_attribute_taxonomy_name('color');
+    if (taxonomy_exists($taxonomy)) {
+        $term_ids = array();
+        foreach ($color_names as $color_name) {
+            $term = term_exists($color_name, $taxonomy);
+            if (!$term) {
+                $term = wp_insert_term($color_name, $taxonomy);
+            }
+            if (!is_wp_error($term)) {
+                $term_ids[] = is_array($term) ? (int) $term['term_id'] : (int) $term;
+            }
+        }
+
+        $attribute = new WC_Product_Attribute();
+        $attribute->set_id((int) wc_attribute_taxonomy_id_by_name('color'));
+        $attribute->set_name($taxonomy);
+        $attribute->set_options($term_ids);
+        $attribute->set_visible(true);
+        $attribute->set_variation($is_variable);
+        $attributes[$taxonomy] = $attribute;
+        $product->set_attributes($attributes);
+        return;
+    }
+
+    $attribute = new WC_Product_Attribute();
+    $attribute->set_name(__('Color', 'syncmaster'));
+    $attribute->set_options($color_names);
+    $attribute->set_visible(true);
+    $attribute->set_variation($is_variable);
+    $attributes['color'] = $attribute;
+    $product->set_attributes($attributes);
+}
+
+function syncmaster_assign_color_terms($product_id, $colors) {
+    if (empty($colors)) {
+        return;
+    }
+
+    $taxonomy = wc_attribute_taxonomy_name('color');
+    if (!taxonomy_exists($taxonomy)) {
+        return;
+    }
+
+    $color_names = array();
+    foreach ($colors as $color) {
+        $name = $color['colorName'] ?? '';
+        if ($name !== '') {
+            $color_names[] = $name;
+        }
+    }
+
+    $color_names = array_values(array_unique($color_names));
+    if (empty($color_names)) {
+        return;
+    }
+
+    $term_ids = array();
+    foreach ($color_names as $color_name) {
+        $term = term_exists($color_name, $taxonomy);
+        if (!$term) {
+            $term = wp_insert_term($color_name, $taxonomy);
+        }
+        if (!is_wp_error($term)) {
+            $term_ids[] = is_array($term) ? (int) $term['term_id'] : (int) $term;
+        }
+    }
+
+    if (!empty($term_ids)) {
+        wp_set_object_terms($product_id, $term_ids, $taxonomy, false);
+    }
+}
+
 function syncmaster_set_product_category($product_id, $category_name) {
     if ($category_name === '') {
         return;
@@ -230,7 +350,15 @@ function syncmaster_sync_monitored_products() {
         }
         $mapped = syncmaster_map_product_data($api_item);
         $product_id = wc_get_product_id_by_sku($sku);
-        $product = $product_id ? wc_get_product($product_id) : new WC_Product_Simple();
+        $style_title = trim(($api_item['brandName'] ?? '') . ' ' . ($api_item['styleName'] ?? ''));
+        $colors = $style_title !== '' ? syncmaster_get_style_colors($style_title) : array();
+        $colors = syncmaster_get_selected_colors($sku, $colors);
+        $is_variable = count($colors) > 1;
+        if ($product_id) {
+            $product = $is_variable ? new WC_Product_Variable($product_id) : new WC_Product_Simple($product_id);
+        } else {
+            $product = $is_variable ? new WC_Product_Variable() : new WC_Product_Simple();
+        }
 
         if (!$product) {
             $fail++;
@@ -252,9 +380,11 @@ function syncmaster_sync_monitored_products() {
             $product->set_description($mapped['description']);
         }
         $product->set_status('publish');
+        syncmaster_apply_color_attributes($product, $colors, $is_variable);
         $saved_id = $product->save();
 
         if ($saved_id) {
+            syncmaster_assign_color_terms($saved_id, $colors);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
             syncmaster_set_product_category($saved_id, $mapped['category']);
             if ($mapped['image'] !== '') {
@@ -377,6 +507,38 @@ function syncmaster_handle_remove_sku() {
     }
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&removed=1'));
+    exit;
+}
+
+function syncmaster_handle_save_colors() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_save_colors');
+
+    $sku = sanitize_text_field(wp_unslash($_POST['sku'] ?? ''));
+    if ($sku === '') {
+        wp_safe_redirect(admin_url('admin.php?page=syncmaster_products'));
+        exit;
+    }
+
+    $selected = array();
+    $posted_colors = $_POST['syncmaster_colors'] ?? array();
+    if (is_array($posted_colors)) {
+        foreach ($posted_colors as $color) {
+            $color = sanitize_text_field(wp_unslash($color));
+            if ($color !== '') {
+                $selected[] = $color;
+            }
+        }
+    }
+
+    $selections = syncmaster_get_color_selections();
+    $selections[$sku] = array_values(array_unique($selected));
+    update_option('syncmaster_color_selections', $selections);
+
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&colors_saved=1'));
     exit;
 }
 
