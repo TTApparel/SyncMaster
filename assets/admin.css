@@ -171,6 +171,8 @@
     padding: 16px;
     display: none;
     width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 .syncmaster-color-panel.is-open {
