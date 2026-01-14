@@ -171,6 +171,8 @@
     padding: 16px;
     display: none;
     width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 .syncmaster-color-panel.is-open {
@@ -178,11 +180,13 @@
 }
 
 .syncmaster-color-grid {
-    display: grid !important;
+    display: grid;
     gap: 12px;
-    grid-template-columns: repeat(6, minmax(180px, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     max-width: 100%;
     overflow: hidden;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .syncmaster-color-card {
@@ -193,6 +197,22 @@
     display: grid;
     gap: 10px;
     min-width: 0;
+}
+
+.syncmaster-color-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.syncmaster-color-toggle input {
+    margin: 0;
+}
+
+.syncmaster-save-colors {
+    margin-top: 12px;
 }
 
 .syncmaster-color-card img {

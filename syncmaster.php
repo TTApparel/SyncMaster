@@ -19,8 +19,8 @@ define('SYNCMASTER_STYLES_API_URL', 'https://api-ca.ssactivewear.com/v2/styles')
 define('SYNCMASTER_PRODUCTS_TABLE', 'syncmaster_products');
 define('SYNCMASTER_LOGS_TABLE', 'syncmaster_logs');
 
-syncmaster_safe_require(SYNCMASTER_PLUGIN_DIR . 'includes/admin-pages.php');
 syncmaster_safe_require(SYNCMASTER_PLUGIN_DIR . 'includes/sync-functions.php');
+syncmaster_safe_require(SYNCMASTER_PLUGIN_DIR . 'includes/admin-pages.php');
 
 function syncmaster_safe_require($file) {
     if (file_exists($file)) {
@@ -55,6 +55,7 @@ add_action('admin_post_syncmaster_save_settings', 'syncmaster_handle_save_settin
 add_action('admin_post_syncmaster_add_sku', 'syncmaster_handle_add_sku');
 add_action('admin_post_syncmaster_remove_sku', 'syncmaster_handle_remove_sku');
 add_action('admin_post_syncmaster_test_api', 'syncmaster_handle_test_api');
+add_action('admin_post_syncmaster_save_colors', 'syncmaster_handle_save_colors');
 
 add_action('syncmaster_cron_sync', 'syncmaster_run_scheduled_sync');
 
