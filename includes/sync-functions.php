@@ -273,13 +273,16 @@ function syncmaster_assign_color_terms($product_id, $terms_or_colors, $taxonomy 
     }
 
     $term_ids = array();
+    $has_non_numeric = false;
     foreach ((array) $terms_or_colors as $term_id) {
         if (is_numeric($term_id)) {
             $term_ids[] = (int) $term_id;
+        } else {
+            $has_non_numeric = true;
         }
     }
 
-    if (empty($term_ids)) {
+    if (empty($term_ids) && $has_non_numeric) {
         $term_ids = syncmaster_resolve_color_term_ids((array) $terms_or_colors);
     }
 
