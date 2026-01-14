@@ -188,74 +188,106 @@ function syncmaster_apply_product_brand($product_id, $product, $brand_name) {
     $product->set_attributes($attributes);
 }
 
-function syncmaster_apply_color_attributes($product, $colors, $is_variable) {
-    if (empty($colors)) {
-        return;
-    }
-
-    $color_names = array();
-    foreach ($colors as $color) {
-        $name = is_array($color) ? ($color['colorName'] ?? '') : $color;
-        $name = is_string($name) ? trim($name) : '';
-        if ($name !== '') {
-            $color_names[] = $name;
-        }
-    }
-
-    $color_names = array_values(array_unique($color_names));
-    if (empty($color_names)) {
-        return;
-    }
-
-    $attributes = $product->get_attributes();
-    $attribute = new WC_Product_Attribute();
-    $attribute->set_name(__('Color', 'syncmaster'));
-    $attribute->set_options($color_names);
-    $attribute->set_visible(true);
-    $attribute->set_variation($is_variable);
-    $attributes['color'] = $attribute;
-    $product->set_attributes($attributes);
-}
-
-function syncmaster_assign_color_terms($product_id, $colors) {
-    if (empty($colors)) {
-        return;
-    }
-
-    $color_names = array();
-    foreach ($colors as $color) {
-        $name = is_array($color) ? ($color['colorName'] ?? '') : $color;
-        $name = is_string($name) ? sanitize_text_field($name) : '';
-        if ($name !== '') {
-            $color_names[] = $name;
-        }
-    }
-
-    $color_names = array_values(array_unique($color_names));
-    if (empty($color_names)) {
-        return;
-    }
-
+function syncmaster_get_color_taxonomy() {
     $taxonomy = function_exists('wc_attribute_taxonomy_name')
         ? wc_attribute_taxonomy_name('color')
         : 'pa_color';
+    return $taxonomy;
+}
+
+function syncmaster_resolve_color_term_ids($colors, $selected_colors = array()) {
+    $taxonomy = syncmaster_get_color_taxonomy();
+    if (!taxonomy_exists($taxonomy)) {
+        return array();
+    }
+
+    $candidate_names = array();
+    if (!empty($selected_colors)) {
+        foreach ($selected_colors as $color_name) {
+            $color_name = sanitize_text_field($color_name);
+            if ($color_name !== '') {
+                $candidate_names[] = $color_name;
+            }
+        }
+    } else {
+        foreach ($colors as $color) {
+            $name = is_array($color) ? ($color['colorName'] ?? '') : $color;
+            $name = is_string($name) ? sanitize_text_field($name) : '';
+            if ($name !== '') {
+                $candidate_names[] = $name;
+            }
+        }
+    }
+
+    $candidate_names = array_values(array_unique($candidate_names));
+    if (empty($candidate_names)) {
+        return array();
+    }
+
+    $term_ids = array();
+    foreach ($candidate_names as $color_name) {
+        $slug = sanitize_title($color_name);
+        $term = get_term_by('slug', $slug, $taxonomy);
+        if (!$term) {
+            $term = get_term_by('name', $color_name, $taxonomy);
+        }
+        if (!$term) {
+            $term = wp_insert_term($color_name, $taxonomy, array('slug' => $slug));
+        }
+        if (!is_wp_error($term) && $term) {
+            $term_ids[] = is_array($term) ? (int) $term['term_id'] : (int) $term->term_id;
+        }
+    }
+
+    return array_values(array_unique(array_filter($term_ids)));
+}
+
+function syncmaster_apply_color_attributes($product, $term_ids, $taxonomy, $is_variable) {
+    if (empty($term_ids)) {
+        return;
+    }
+
+    $attribute_id = function_exists('wc_attribute_taxonomy_id_by_name')
+        ? wc_attribute_taxonomy_id_by_name('color')
+        : 0;
+
+    $attributes = $product->get_attributes();
+    $attribute = new WC_Product_Attribute();
+    $attribute->set_id((int) $attribute_id);
+    $attribute->set_name($taxonomy);
+    $attribute->set_options(array_map('intval', $term_ids));
+    $attribute->set_visible(true);
+    $attribute->set_variation($is_variable);
+    $attributes[$taxonomy] = $attribute;
+    $product->set_attributes($attributes);
+}
+
+function syncmaster_assign_color_terms($product_id, $terms_or_colors, $taxonomy = null) {
+    if (empty($terms_or_colors)) {
+        return;
+    }
+
+    $taxonomy = $taxonomy ?: syncmaster_get_color_taxonomy();
     if (!taxonomy_exists($taxonomy)) {
         return;
     }
 
     $term_ids = array();
-    foreach ($color_names as $color_name) {
-        $term = term_exists($color_name, $taxonomy);
-        if (!$term) {
-            $term = wp_insert_term($color_name, $taxonomy);
-        }
-        if (!is_wp_error($term)) {
-            $term_ids[] = is_array($term) ? (int) $term['term_id'] : (int) $term;
+    $has_non_numeric = false;
+    foreach ((array) $terms_or_colors as $term_id) {
+        if (is_numeric($term_id)) {
+            $term_ids[] = (int) $term_id;
+        } else {
+            $has_non_numeric = true;
         }
     }
 
+    if (empty($term_ids) && $has_non_numeric) {
+        $term_ids = syncmaster_resolve_color_term_ids((array) $terms_or_colors);
+    }
+
     if (!empty($term_ids)) {
-        wp_set_object_terms($product_id, $term_ids, $taxonomy, false);
+        wp_set_object_terms($product_id, array_map('intval', $term_ids), $taxonomy, false);
     }
 }
 
@@ -302,6 +334,8 @@ function syncmaster_set_featured_image($product_id, $image_url) {
 function syncmaster_sync_monitored_products() {
     $monitored = syncmaster_get_monitored_products();
     $monitored_count = count($monitored);
+    $color_selections = syncmaster_get_color_selections();
+    $color_taxonomy = syncmaster_get_color_taxonomy();
 
     if (!class_exists('WooCommerce')) {
         return array(
@@ -330,6 +364,8 @@ function syncmaster_sync_monitored_products() {
         $product_id = wc_get_product_id_by_sku($sku);
         $style_title = trim(($api_item['brandName'] ?? '') . ' ' . ($api_item['styleName'] ?? ''));
         $colors = $style_title !== '' ? syncmaster_get_style_colors($style_title) : array();
+        $selected_colors = $color_selections[$sku] ?? array();
+        $color_term_ids = syncmaster_resolve_color_term_ids($colors, $selected_colors);
         $is_variable = count($colors) > 1;
         if ($product_id) {
             $product = $is_variable ? new WC_Product_Variable($product_id) : new WC_Product_Simple($product_id);
@@ -357,11 +393,11 @@ function syncmaster_sync_monitored_products() {
             $product->set_description($mapped['description']);
         }
         $product->set_status('publish');
-        syncmaster_apply_color_attributes($product, $colors, $is_variable);
+        syncmaster_apply_color_attributes($product, $color_term_ids, $color_taxonomy, $is_variable);
         $saved_id = $product->save();
 
         if ($saved_id) {
-            syncmaster_assign_color_terms($saved_id, $colors);
+            syncmaster_assign_color_terms($saved_id, $color_term_ids, $color_taxonomy);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
             syncmaster_set_product_category($saved_id, $mapped['category']);
             if ($mapped['image'] !== '') {
