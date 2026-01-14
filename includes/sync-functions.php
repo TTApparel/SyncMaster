@@ -161,34 +161,6 @@ function syncmaster_apply_product_brand($product_id, $product, $brand_name) {
     $product->set_attributes($attributes);
 }
 
-function syncmaster_get_color_selections() {
-    $selections = get_option('syncmaster_color_selections', array());
-    return is_array($selections) ? $selections : array();
-}
-
-function syncmaster_get_selected_colors($sku, $colors) {
-    $selections = syncmaster_get_color_selections();
-    if (!array_key_exists($sku, $selections)) {
-        return $colors;
-    }
-
-    $stored = $selections[$sku];
-    if (!is_array($stored)) {
-        return $colors;
-    }
-
-    $allowed = array_map('strval', $stored);
-    $filtered = array();
-    foreach ($colors as $color) {
-        $name = $color['colorName'] ?? '';
-        if ($name !== '' && in_array($name, $allowed, true)) {
-            $filtered[] = $color;
-        }
-    }
-
-    return $filtered;
-}
-
 function syncmaster_apply_color_attributes($product, $colors, $is_variable) {
     if (empty($colors)) {
         return;
@@ -209,30 +181,6 @@ function syncmaster_apply_color_attributes($product, $colors, $is_variable) {
     }
 
     $attributes = $product->get_attributes();
-    $taxonomy = wc_attribute_taxonomy_name('color');
-    if (taxonomy_exists($taxonomy)) {
-        $term_ids = array();
-        foreach ($color_names as $color_name) {
-            $term = term_exists($color_name, $taxonomy);
-            if (!$term) {
-                $term = wp_insert_term($color_name, $taxonomy);
-            }
-            if (!is_wp_error($term)) {
-                $term_ids[] = is_array($term) ? (int) $term['term_id'] : (int) $term;
-            }
-        }
-
-        $attribute = new WC_Product_Attribute();
-        $attribute->set_id((int) wc_attribute_taxonomy_id_by_name('color'));
-        $attribute->set_name($taxonomy);
-        $attribute->set_options($term_ids);
-        $attribute->set_visible(true);
-        $attribute->set_variation($is_variable);
-        $attributes[$taxonomy] = $attribute;
-        $product->set_attributes($attributes);
-        return;
-    }
-
     $attribute = new WC_Product_Attribute();
     $attribute->set_name(__('Color', 'syncmaster'));
     $attribute->set_options($color_names);
@@ -240,45 +188,6 @@ function syncmaster_apply_color_attributes($product, $colors, $is_variable) {
     $attribute->set_variation($is_variable);
     $attributes['color'] = $attribute;
     $product->set_attributes($attributes);
-}
-
-function syncmaster_assign_color_terms($product_id, $colors) {
-    if (empty($colors)) {
-        return;
-    }
-
-    $taxonomy = wc_attribute_taxonomy_name('color');
-    if (!taxonomy_exists($taxonomy)) {
-        return;
-    }
-
-    $color_names = array();
-    foreach ($colors as $color) {
-        $name = $color['colorName'] ?? '';
-        if ($name !== '') {
-            $color_names[] = $name;
-        }
-    }
-
-    $color_names = array_values(array_unique($color_names));
-    if (empty($color_names)) {
-        return;
-    }
-
-    $term_ids = array();
-    foreach ($color_names as $color_name) {
-        $term = term_exists($color_name, $taxonomy);
-        if (!$term) {
-            $term = wp_insert_term($color_name, $taxonomy);
-        }
-        if (!is_wp_error($term)) {
-            $term_ids[] = is_array($term) ? (int) $term['term_id'] : (int) $term;
-        }
-    }
-
-    if (!empty($term_ids)) {
-        wp_set_object_terms($product_id, $term_ids, $taxonomy, false);
-    }
 }
 
 function syncmaster_set_product_category($product_id, $category_name) {
@@ -352,7 +261,6 @@ function syncmaster_sync_monitored_products() {
         $product_id = wc_get_product_id_by_sku($sku);
         $style_title = trim(($api_item['brandName'] ?? '') . ' ' . ($api_item['styleName'] ?? ''));
         $colors = $style_title !== '' ? syncmaster_get_style_colors($style_title) : array();
-        $colors = syncmaster_get_selected_colors($sku, $colors);
         $is_variable = count($colors) > 1;
         if ($product_id) {
             $product = $is_variable ? new WC_Product_Variable($product_id) : new WC_Product_Simple($product_id);
