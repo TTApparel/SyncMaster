@@ -253,6 +253,13 @@ function syncmaster_render_products() {
                                                 <div>
                                                     <strong><?php echo esc_html($color_name); ?></strong>
                                                     <span class="syncmaster-muted"><?php echo esc_html($color['colorCode']); ?></span>
+                                                    <?php
+                                                    $size_names = $color['sizeNames'] ?? array();
+                                                    if (!empty($size_names)) :
+                                                        $size_list = implode(', ', array_map('sanitize_text_field', $size_names));
+                                                        ?>
+                                                        <span class="syncmaster-muted"><?php echo esc_html($size_list); ?></span>
+                                                    <?php endif; ?>
                                                 </div>
                                             </label>
                                         <?php endforeach; ?>
