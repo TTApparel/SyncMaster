@@ -262,12 +262,30 @@ function syncmaster_apply_color_attributes($product, $term_ids, $taxonomy, $is_v
     $product->set_attributes($attributes);
 }
 
-function syncmaster_assign_color_terms($product_id, $term_ids, $taxonomy) {
-    if (empty($term_ids)) {
+function syncmaster_assign_color_terms($product_id, $terms_or_colors, $taxonomy = null) {
+    if (empty($terms_or_colors)) {
         return;
     }
 
-    wp_set_object_terms($product_id, array_map('intval', $term_ids), $taxonomy, false);
+    $taxonomy = $taxonomy ?: syncmaster_get_color_taxonomy();
+    if (!taxonomy_exists($taxonomy)) {
+        return;
+    }
+
+    $term_ids = array();
+    foreach ((array) $terms_or_colors as $term_id) {
+        if (is_numeric($term_id)) {
+            $term_ids[] = (int) $term_id;
+        }
+    }
+
+    if (empty($term_ids)) {
+        $term_ids = syncmaster_resolve_color_term_ids((array) $terms_or_colors);
+    }
+
+    if (!empty($term_ids)) {
+        wp_set_object_terms($product_id, array_map('intval', $term_ids), $taxonomy, false);
+    }
 }
 
 function syncmaster_set_product_category($product_id, $category_name) {
