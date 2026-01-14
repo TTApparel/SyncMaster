@@ -39,6 +39,28 @@ function syncmaster_get_color_selections() {
     return $sanitized;
 }
 
+function syncmaster_get_margin_settings() {
+    $stored = get_option('syncmaster_margin_settings', array());
+    if (!is_array($stored)) {
+        return array();
+    }
+
+    $sanitized = array();
+    foreach ($stored as $sku => $margin) {
+        $sku = sanitize_text_field($sku);
+        if ($sku === '') {
+            continue;
+        }
+        $margin_value = (float) $margin;
+        if ($margin_value <= 0) {
+            continue;
+        }
+        $sanitized[$sku] = $margin_value;
+    }
+
+    return $sanitized;
+}
+
 function syncmaster_handle_save_settings() {
     if (!current_user_can('manage_options')) {
         wp_die(__('Unauthorized', 'syncmaster'));
@@ -59,6 +81,28 @@ function syncmaster_handle_save_settings() {
     syncmaster_reschedule_cron();
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_settings&updated=1'));
+    exit;
+}
+
+function syncmaster_handle_save_margin() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_save_margin');
+
+    $sku = sanitize_text_field(wp_unslash($_POST['sku'] ?? ''));
+    $margin = isset($_POST['margin_percent']) ? (float) wp_unslash($_POST['margin_percent']) : 0;
+    if ($sku === '' || $margin <= 0) {
+        wp_safe_redirect(admin_url('admin.php?page=syncmaster_products'));
+        exit;
+    }
+
+    $settings = syncmaster_get_margin_settings();
+    $settings[$sku] = $margin;
+    update_option('syncmaster_margin_settings', $settings);
+
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&margin_saved=1'));
     exit;
 }
 
@@ -484,7 +528,37 @@ function syncmaster_collect_color_size_qty_map($colors, $selected_colors = array
     return $map;
 }
 
-function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $color_size_sku_map, $color_size_qty_map, $color_taxonomy, $size_taxonomy) {
+function syncmaster_collect_color_size_price_map($colors, $selected_colors = array()) {
+    $map = array();
+    foreach ($colors as $color) {
+        $color_name = $color['colorName'] ?? '';
+        $color_name = sanitize_text_field($color_name);
+        if ($color_name === '') {
+            continue;
+        }
+        if (!empty($selected_colors) && !in_array($color_name, $selected_colors, true)) {
+            continue;
+        }
+        $size_prices = array();
+        $raw_size_prices = $color['sizePrices'] ?? array();
+        if (is_array($raw_size_prices)) {
+            foreach ($raw_size_prices as $size_name => $size_price) {
+                $size_name = sanitize_text_field($size_name);
+                $size_price = (float) $size_price;
+                if ($size_name !== '') {
+                    $size_prices[$size_name] = $size_price;
+                }
+            }
+        }
+        if (!empty($size_prices)) {
+            $map[$color_name] = $size_prices;
+        }
+    }
+
+    return $map;
+}
+
+function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $color_size_sku_map, $color_size_qty_map, $color_size_price_map, $color_taxonomy, $size_taxonomy, $margin_percent) {
     if (empty($color_size_map)) {
         return;
     }
@@ -531,6 +605,16 @@ function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $co
             $variation->set_manage_stock(true);
             $variation->set_stock_quantity((int) $variation_qty);
             $variation->set_stock_status($variation_qty > 0 ? 'instock' : 'outofstock');
+            $customer_price = $color_size_price_map[$color_name][$size_name] ?? 0;
+            if ($customer_price > 0) {
+                $margin_multiplier = max(((float) $margin_percent) / 100, 0.01);
+                $variation_price = $customer_price / $margin_multiplier;
+                if (function_exists('wc_format_decimal')) {
+                    $variation_price = wc_format_decimal($variation_price);
+                }
+                $variation->set_regular_price($variation_price);
+                $variation->set_price($variation_price);
+            }
             $variation->set_status('publish');
             $variation->save();
         }
@@ -581,6 +665,7 @@ function syncmaster_sync_monitored_products() {
     $monitored = syncmaster_get_monitored_products();
     $monitored_count = count($monitored);
     $color_selections = syncmaster_get_color_selections();
+    $margin_settings = syncmaster_get_margin_settings();
     $color_taxonomy = syncmaster_get_color_taxonomy();
     $size_taxonomy = syncmaster_get_size_taxonomy();
 
@@ -616,9 +701,11 @@ function syncmaster_sync_monitored_products() {
         $color_size_map = syncmaster_collect_color_size_map($colors, $selected_colors);
         $color_size_sku_map = syncmaster_collect_color_size_sku_map($colors, $selected_colors);
         $color_size_qty_map = syncmaster_collect_color_size_qty_map($colors, $selected_colors);
+        $color_size_price_map = syncmaster_collect_color_size_price_map($colors, $selected_colors);
         $size_names = syncmaster_collect_size_names($colors, $selected_colors);
         $size_term_ids = syncmaster_resolve_attribute_term_ids($size_names, $size_taxonomy);
         $is_variable = count($color_term_ids) > 1 || count($size_term_ids) > 1;
+        $margin_percent = $margin_settings[$sku] ?? 50;
         if ($product_id) {
             $product = $is_variable ? new WC_Product_Variable($product_id) : new WC_Product_Simple($product_id);
         } else {
@@ -664,8 +751,10 @@ function syncmaster_sync_monitored_products() {
                     $color_size_map,
                     $color_size_sku_map,
                     $color_size_qty_map,
+                    $color_size_price_map,
                     $color_taxonomy,
-                    $size_taxonomy
+                    $size_taxonomy,
+                    $margin_percent
                 );
             }
         }
@@ -845,6 +934,66 @@ function syncmaster_get_style_summary($style_id) {
     return $summary;
 }
 
+function syncmaster_extract_scalar($value) {
+    if (is_array($value)) {
+        if (isset($value[0])) {
+            return syncmaster_extract_scalar($value[0]);
+        }
+        if (!empty($value)) {
+            return syncmaster_extract_scalar(reset($value));
+        }
+        return '';
+    }
+
+    if (is_scalar($value)) {
+        return (string) $value;
+    }
+
+    return '';
+}
+
+function syncmaster_sum_warehouse_qty($item) {
+    $warehouses = $item['warehouses'] ?? ($item['Warehouses'] ?? array());
+    if (!is_array($warehouses)) {
+        return 0;
+    }
+
+    $warehouse_rows = $warehouses['warehouse'] ?? ($warehouses['Warehouse'] ?? $warehouses);
+    if (!is_array($warehouse_rows)) {
+        return 0;
+    }
+
+    $rows = isset($warehouse_rows[0]) ? $warehouse_rows : array($warehouse_rows);
+    $total = 0;
+    foreach ($rows as $warehouse) {
+        if (!is_array($warehouse)) {
+            continue;
+        }
+        if (isset($warehouse['qty'])) {
+            $total += (int) syncmaster_extract_scalar($warehouse['qty']);
+        } elseif (isset($warehouse['Qty'])) {
+            $total += (int) syncmaster_extract_scalar($warehouse['Qty']);
+        }
+    }
+
+    return $total;
+}
+
+function syncmaster_parse_api_response($body) {
+    $data = json_decode($body, true);
+    if (is_array($data)) {
+        return $data;
+    }
+
+    $xml = simplexml_load_string($body, 'SimpleXMLElement', LIBXML_NOCDATA);
+    if ($xml === false) {
+        return array();
+    }
+
+    $decoded = json_decode(wp_json_encode($xml), true);
+    return is_array($decoded) ? $decoded : array();
+}
+
 function syncmaster_get_style_colors($style_title) {
     $style_title = sanitize_text_field($style_title);
     $cache_key = 'syncmaster_style_colors_' . md5($style_title);
@@ -873,33 +1022,55 @@ function syncmaster_get_style_colors($style_title) {
     if (!is_wp_error($response)) {
         $status = wp_remote_retrieve_response_code($response);
         $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
+        $data = syncmaster_parse_api_response($body);
         if ($status === 200 && is_array($data)) {
-            foreach ($data as $item) {
-                $color_code = $item['colorCode'] ?? '';
+            $items = $data['Sku'] ?? ($data['sku'] ?? $data);
+            if (!is_array($items)) {
+                $items = array();
+            }
+            if (!empty($items) && !isset($items[0])) {
+                $items = array($items);
+            }
+            foreach ($items as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $color_code = syncmaster_extract_scalar($item['colorCode'] ?? ($item['ColorCode'] ?? ''));
                 if ($color_code === '') {
                     continue;
                 }
                 if (!isset($colors[$color_code])) {
                     $colors[$color_code] = array(
                         'colorCode' => $color_code,
-                        'colorName' => $item['colorName'] ?? '',
-                        'colorFrontImage' => $item['colorFrontImage'] ?? '',
+                        'colorName' => syncmaster_extract_scalar($item['colorName'] ?? ($item['ColorName'] ?? '')),
+                        'colorFrontImage' => syncmaster_extract_scalar($item['colorFrontImage'] ?? ($item['ColorFrontImage'] ?? '')),
                         'sizeNames' => array(),
                         'sizeSkus' => array(),
+                        'sizePrices' => array(),
                         'sizeQtys' => array(),
                     );
                 }
-                $size_name = sanitize_text_field($item['sizeName'] ?? '');
+                $size_name = sanitize_text_field(syncmaster_extract_scalar($item['sizeName'] ?? ($item['SizeName'] ?? '')));
                 if ($size_name !== '') {
                     $colors[$color_code]['sizeNames'][] = $size_name;
                 }
-                $size_sku = sanitize_text_field($item['sku'] ?? '');
+                $size_sku = sanitize_text_field(syncmaster_extract_scalar($item['sku'] ?? ($item['Sku'] ?? '')));
                 if ($size_name !== '' && $size_sku !== '') {
                     $colors[$color_code]['sizeSkus'][$size_name] = $size_sku;
                 }
-                $size_qty = isset($item['qty']) ? (int) $item['qty'] : 0;
-                if ($size_name !== '' && $size_qty > 0) {
+                $size_price = syncmaster_extract_scalar($item['customerPrice'] ?? ($item['CustomerPrice'] ?? ''));
+                if ($size_name !== '' && $size_price !== '') {
+                    $colors[$color_code]['sizePrices'][$size_name] = (float) $size_price;
+                }
+                $size_qty = 0;
+                if (isset($item['qty'])) {
+                    $size_qty = (int) syncmaster_extract_scalar($item['qty']);
+                } elseif (isset($item['Qty'])) {
+                    $size_qty = (int) syncmaster_extract_scalar($item['Qty']);
+                } else {
+                    $size_qty = syncmaster_sum_warehouse_qty($item);
+                }
+                if ($size_name !== '') {
                     if (!isset($colors[$color_code]['sizeQtys'][$size_name])) {
                         $colors[$color_code]['sizeQtys'][$size_name] = 0;
                     }
@@ -917,6 +1088,10 @@ function syncmaster_get_style_colors($style_title) {
         $size_skus = $color_data['sizeSkus'] ?? array();
         if (!empty($size_skus)) {
             $colors[$color_code]['sizeSkus'] = array_filter($size_skus, 'strlen');
+        }
+        $size_prices = $color_data['sizePrices'] ?? array();
+        if (!empty($size_prices)) {
+            $colors[$color_code]['sizePrices'] = array_filter($size_prices, 'is_numeric');
         }
         $size_qtys = $color_data['sizeQtys'] ?? array();
         if (!empty($size_qtys)) {
