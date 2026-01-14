@@ -252,27 +252,16 @@ function syncmaster_resolve_color_term_ids($colors, $selected_colors = array()) 
                 $candidate_names[] = $color_name;
             }
         }
-    } else {
-        foreach ($colors as $color) {
-            $name = is_array($color) ? ($color['colorName'] ?? '') : $color;
-            $name = is_string($name) ? sanitize_text_field($name) : '';
-            if ($name !== '') {
-                $candidate_names[] = $name;
-            }
-        }
-    } else {
-        foreach ($colors as $color) {
-            $name = is_array($color) ? ($color['colorName'] ?? '') : $color;
-            $name = is_string($name) ? sanitize_text_field($name) : '';
-            if ($name !== '') {
-                $candidate_names[] = $name;
-            }
-        }
     }
 
-    $candidate_names = array_values(array_unique($candidate_names));
     if (empty($candidate_names)) {
-        return array();
+        foreach ($colors as $color) {
+            $name = is_array($color) ? ($color['colorName'] ?? '') : $color;
+            $name = is_string($name) ? sanitize_text_field($name) : '';
+            if ($name !== '') {
+                $candidate_names[] = $name;
+            }
+        }
     }
 
     $candidate_names = array_values(array_unique($candidate_names));
