@@ -612,15 +612,29 @@ function syncmaster_get_style_colors($style_title) {
         if ($status === 200 && is_array($data)) {
             foreach ($data as $item) {
                 $color_code = $item['colorCode'] ?? '';
-                if ($color_code === '' || isset($colors[$color_code])) {
+                if ($color_code === '') {
                     continue;
                 }
-                $colors[$color_code] = array(
-                    'colorCode' => $color_code,
-                    'colorName' => $item['colorName'] ?? '',
-                    'colorFrontImage' => $item['colorFrontImage'] ?? '',
-                );
+                if (!isset($colors[$color_code])) {
+                    $colors[$color_code] = array(
+                        'colorCode' => $color_code,
+                        'colorName' => $item['colorName'] ?? '',
+                        'colorFrontImage' => $item['colorFrontImage'] ?? '',
+                        'sizeNames' => array(),
+                    );
+                }
+                $size_name = sanitize_text_field($item['sizeName'] ?? '');
+                if ($size_name !== '') {
+                    $colors[$color_code]['sizeNames'][] = $size_name;
+                }
             }
+        }
+    }
+
+    foreach ($colors as $color_code => $color_data) {
+        $size_names = $color_data['sizeNames'] ?? array();
+        if (!empty($size_names)) {
+            $colors[$color_code]['sizeNames'] = array_values(array_unique($size_names));
         }
     }
 
