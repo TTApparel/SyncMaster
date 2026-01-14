@@ -55,6 +55,7 @@ add_action('admin_post_syncmaster_save_settings', 'syncmaster_handle_save_settin
 add_action('admin_post_syncmaster_add_sku', 'syncmaster_handle_add_sku');
 add_action('admin_post_syncmaster_remove_sku', 'syncmaster_handle_remove_sku');
 add_action('admin_post_syncmaster_test_api', 'syncmaster_handle_test_api');
+add_action('admin_post_syncmaster_save_colors', 'syncmaster_handle_save_colors');
 
 add_action('syncmaster_cron_sync', 'syncmaster_run_scheduled_sync');
 

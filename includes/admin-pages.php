@@ -147,9 +147,15 @@ function syncmaster_render_products() {
         $search_results = syncmaster_ss_search($query);
     }
     $monitored = syncmaster_get_monitored_products();
+    $color_selections = syncmaster_get_color_selections();
 
     ob_start();
     ?>
+    <?php if (!empty($_GET['colors_saved'])) : ?>
+        <div class="notice notice-success is-dismissible">
+            <p><?php echo esc_html__('Color preferences updated.', 'syncmaster'); ?></p>
+        </div>
+    <?php endif; ?>
     <section class="syncmaster-card">
         <h2><?php echo esc_html__('Search Products', 'syncmaster'); ?></h2>
         <form method="get" class="syncmaster-search">
@@ -195,6 +201,8 @@ function syncmaster_render_products() {
                 <?php foreach ($monitored as $item) : ?>
                     <?php $style = syncmaster_get_style_summary($item['sku']); ?>
                     <?php $colors = syncmaster_get_style_colors($style['title']); ?>
+                    <?php $has_color_selection = array_key_exists($item['sku'], $color_selections); ?>
+                    <?php $selected_colors = $color_selections[$item['sku']] ?? array(); ?>
                     <?php $panel_id = 'syncmaster-colors-' . esc_attr($item['sku']); ?>
                     <li class="syncmaster-monitored-item">
                         <div class="syncmaster-monitored-header">
@@ -220,25 +228,39 @@ function syncmaster_render_products() {
                             <?php if (empty($colors)) : ?>
                                 <p class="syncmaster-muted"><?php echo esc_html__('No color data found.', 'syncmaster'); ?></p>
                             <?php else : ?>
-                                <div class="syncmaster-color-grid">
-                                    <?php foreach ($colors as $color) : ?>
-                                        <?php
-                                        $image_url = $color['colorFrontImage'] ?? '';
-                                        if ($image_url !== '' && strpos($image_url, 'http') !== 0) {
-                                            $image_url = 'https://cdn.ssactivewear.com/' . ltrim($image_url, '/');
-                                        }
-                                        ?>
-                                        <div class="syncmaster-color-card">
-                                            <?php if ($image_url) : ?>
-                                                <img src="<?php echo esc_url($image_url); ?>" alt="<?php echo esc_attr($color['colorName']); ?>">
-                                            <?php endif; ?>
-                                            <div>
-                                                <strong><?php echo esc_html($color['colorName']); ?></strong>
-                                                <span class="syncmaster-muted"><?php echo esc_html($color['colorCode']); ?></span>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                </div>
+                                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                                    <?php wp_nonce_field('syncmaster_save_colors'); ?>
+                                    <input type="hidden" name="action" value="syncmaster_save_colors">
+                                    <input type="hidden" name="sku" value="<?php echo esc_attr($item['sku']); ?>">
+                                    <div class="syncmaster-color-grid">
+                                        <?php foreach ($colors as $color) : ?>
+                                            <?php
+                                            $color_name = $color['colorName'] ?? '';
+                                            $image_url = $color['colorFrontImage'] ?? '';
+                                            if ($image_url !== '' && strpos($image_url, 'http') !== 0) {
+                                                $image_url = 'https://cdn.ssactivewear.com/' . ltrim($image_url, '/');
+                                            }
+                                            $is_checked = !$has_color_selection || in_array($color_name, $selected_colors, true);
+                                            ?>
+                                            <label class="syncmaster-color-card">
+                                                <span class="syncmaster-color-toggle">
+                                                    <input type="checkbox" name="syncmaster_colors[]" value="<?php echo esc_attr($color_name); ?>" <?php checked($is_checked); ?>>
+                                                    <?php echo esc_html__('Include', 'syncmaster'); ?>
+                                                </span>
+                                                <?php if ($image_url) : ?>
+                                                    <img src="<?php echo esc_url($image_url); ?>" alt="<?php echo esc_attr($color_name); ?>">
+                                                <?php endif; ?>
+                                                <div>
+                                                    <strong><?php echo esc_html($color_name); ?></strong>
+                                                    <span class="syncmaster-muted"><?php echo esc_html($color['colorCode']); ?></span>
+                                                </div>
+                                            </label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <button type="submit" class="button syncmaster-save-colors">
+                                        <?php echo esc_html__('Save Color Preferences', 'syncmaster'); ?>
+                                    </button>
+                                </form>
                             <?php endif; ?>
                         </div>
                     </li>
