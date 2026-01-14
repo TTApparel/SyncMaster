@@ -178,7 +178,7 @@
 }
 
 .syncmaster-color-grid {
-    display: grid !important;
+    display: grid;
     gap: 12px;
     grid-template-columns: repeat(6, minmax(180px, 1fr));
     max-width: 100%;
