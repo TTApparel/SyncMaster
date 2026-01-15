@@ -558,6 +558,15 @@ function syncmaster_collect_color_size_price_map($colors, $selected_colors = arr
     return $map;
 }
 
+function syncmaster_round_up_price($price, $increment = 0.25) {
+    $increment = (float) $increment;
+    if ($increment <= 0) {
+        return $price;
+    }
+
+    return ceil($price / $increment) * $increment;
+}
+
 function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $color_size_sku_map, $color_size_qty_map, $color_size_price_map, $color_taxonomy, $size_taxonomy, $margin_percent) {
     if (empty($color_size_map)) {
         return;
@@ -609,6 +618,7 @@ function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $co
             if ($customer_price > 0) {
                 $margin_multiplier = max(((float) $margin_percent) / 100, 0.01);
                 $variation_price = $customer_price / $margin_multiplier;
+                $variation_price = syncmaster_round_up_price($variation_price, 0.25);
                 if (function_exists('wc_format_decimal')) {
                     $variation_price = wc_format_decimal($variation_price);
                 }
