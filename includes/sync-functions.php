@@ -61,6 +61,30 @@ function syncmaster_get_margin_settings() {
     return $sanitized;
 }
 
+function syncmaster_get_margin_percent_for_sku($sku, $default = 50) {
+    $sku = sanitize_text_field($sku);
+    if ($sku === '') {
+        return (float) $default;
+    }
+
+    $settings = syncmaster_get_margin_settings();
+    if (isset($settings[$sku])) {
+        return (float) $settings[$sku];
+    }
+
+    if (function_exists('wc_get_product_id_by_sku')) {
+        $product_id = wc_get_product_id_by_sku($sku);
+        if ($product_id) {
+            $stored_margin = (float) get_post_meta($product_id, '_syncmaster_margin_percent', true);
+            if ($stored_margin > 0) {
+                return $stored_margin;
+            }
+        }
+    }
+
+    return (float) $default;
+}
+
 function syncmaster_handle_save_settings() {
     if (!current_user_can('manage_options')) {
         wp_die(__('Unauthorized', 'syncmaster'));
@@ -101,6 +125,12 @@ function syncmaster_handle_save_margin() {
     $settings = syncmaster_get_margin_settings();
     $settings[$sku] = $margin;
     update_option('syncmaster_margin_settings', $settings);
+    if (function_exists('wc_get_product_id_by_sku')) {
+        $product_id = wc_get_product_id_by_sku($sku);
+        if ($product_id) {
+            update_post_meta($product_id, '_syncmaster_margin_percent', $margin);
+        }
+    }
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&margin_saved=1'));
     exit;
@@ -675,7 +705,6 @@ function syncmaster_sync_monitored_products() {
     $monitored = syncmaster_get_monitored_products();
     $monitored_count = count($monitored);
     $color_selections = syncmaster_get_color_selections();
-    $margin_settings = syncmaster_get_margin_settings();
     $color_taxonomy = syncmaster_get_color_taxonomy();
     $size_taxonomy = syncmaster_get_size_taxonomy();
 
@@ -715,7 +744,7 @@ function syncmaster_sync_monitored_products() {
         $size_names = syncmaster_collect_size_names($colors, $selected_colors);
         $size_term_ids = syncmaster_resolve_attribute_term_ids($size_names, $size_taxonomy);
         $is_variable = count($color_term_ids) > 1 || count($size_term_ids) > 1;
-        $margin_percent = $margin_settings[$sku] ?? 50;
+        $margin_percent = syncmaster_get_margin_percent_for_sku($sku, 50);
         if ($product_id) {
             $product = $is_variable ? new WC_Product_Variable($product_id) : new WC_Product_Simple($product_id);
         } else {
