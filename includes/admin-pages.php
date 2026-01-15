@@ -148,12 +148,18 @@ function syncmaster_render_products() {
     }
     $monitored = syncmaster_get_monitored_products();
     $color_selections = syncmaster_get_color_selections();
+    $margin_settings = syncmaster_get_margin_settings();
 
     ob_start();
     ?>
     <?php if (!empty($_GET['colors_saved'])) : ?>
         <div class="notice notice-success is-dismissible">
             <p><?php echo esc_html__('Color preferences updated.', 'syncmaster'); ?></p>
+        </div>
+    <?php endif; ?>
+    <?php if (!empty($_GET['margin_saved'])) : ?>
+        <div class="notice notice-success is-dismissible">
+            <p><?php echo esc_html__('Margin updated.', 'syncmaster'); ?></p>
         </div>
     <?php endif; ?>
     <section class="syncmaster-card">
@@ -203,6 +209,7 @@ function syncmaster_render_products() {
                     <?php $colors = syncmaster_get_style_colors($style['title']); ?>
                     <?php $has_color_selection = array_key_exists($item['sku'], $color_selections); ?>
                     <?php $selected_colors = $color_selections[$item['sku']] ?? array(); ?>
+                    <?php $margin_percent = $margin_settings[$item['sku']] ?? 50; ?>
                     <?php $panel_id = 'syncmaster-colors-' . esc_attr($item['sku']); ?>
                     <li class="syncmaster-monitored-item">
                         <div class="syncmaster-monitored-header">
@@ -215,14 +222,28 @@ function syncmaster_render_products() {
                                     <?php echo esc_html__('View Colors', 'syncmaster'); ?>
                                 </button>
                             </div>
-                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                                <?php wp_nonce_field('syncmaster_remove_sku'); ?>
-                                <input type="hidden" name="action" value="syncmaster_remove_sku">
-                                <input type="hidden" name="sku" value="<?php echo esc_attr($item['sku']); ?>">
-                                <button type="submit" class="button button-link-delete syncmaster-remove">
-                                    <?php echo esc_html__('Remove', 'syncmaster'); ?>
-                                </button>
-                            </form>
+                            <div class="syncmaster-monitored-actions">
+                                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                                    <?php wp_nonce_field('syncmaster_remove_sku'); ?>
+                                    <input type="hidden" name="action" value="syncmaster_remove_sku">
+                                    <input type="hidden" name="sku" value="<?php echo esc_attr($item['sku']); ?>">
+                                    <button type="submit" class="button button-link-delete syncmaster-remove">
+                                        <?php echo esc_html__('Remove', 'syncmaster'); ?>
+                                    </button>
+                                </form>
+                                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="syncmaster-margin-form">
+                                    <?php wp_nonce_field('syncmaster_save_margin'); ?>
+                                    <input type="hidden" name="action" value="syncmaster_save_margin">
+                                    <input type="hidden" name="sku" value="<?php echo esc_attr($item['sku']); ?>">
+                                    <label>
+                                        <span class="syncmaster-muted"><?php echo esc_html__('Margin %', 'syncmaster'); ?></span>
+                                        <input type="number" name="margin_percent" min="0.01" step="0.01" value="<?php echo esc_attr($margin_percent); ?>">
+                                    </label>
+                                    <button type="submit" class="button">
+                                        <?php echo esc_html__('Save Margin', 'syncmaster'); ?>
+                                    </button>
+                                </form>
+                            </div>
                         </div>
                         <div class="syncmaster-color-panel" id="<?php echo esc_attr($panel_id); ?>">
                             <?php if (empty($colors)) : ?>
@@ -253,6 +274,13 @@ function syncmaster_render_products() {
                                                 <div>
                                                     <strong><?php echo esc_html($color_name); ?></strong>
                                                     <span class="syncmaster-muted"><?php echo esc_html($color['colorCode']); ?></span>
+                                                    <?php
+                                                    $size_names = $color['sizeNames'] ?? array();
+                                                    if (!empty($size_names)) :
+                                                        $size_list = implode(', ', array_map('sanitize_text_field', $size_names));
+                                                        ?>
+                                                        <span class="syncmaster-muted"><?php echo esc_html($size_list); ?></span>
+                                                    <?php endif; ?>
                                                 </div>
                                             </label>
                                         <?php endforeach; ?>
