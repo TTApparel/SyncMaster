@@ -941,6 +941,35 @@ function syncmaster_render_external_product_image($image, $product, $size, $attr
 
 add_filter('woocommerce_product_get_image', 'syncmaster_render_external_product_image', 10, 5);
 
+function syncmaster_apply_external_variation_image($data, $product, $variation) {
+    $image_url = syncmaster_get_external_image_url($variation);
+    if ($image_url === '') {
+        return $data;
+    }
+
+    $image_data = array(
+        'src' => $image_url,
+        'srcset' => '',
+        'sizes' => '',
+        'full_src' => $image_url,
+        'full_src_w' => '',
+        'full_src_h' => '',
+        'thumb_src' => $image_url,
+        'thumb_src_w' => '',
+        'thumb_src_h' => '',
+        'alt' => $variation ? $variation->get_name() : '',
+        'title' => $variation ? $variation->get_name() : '',
+        'caption' => '',
+    );
+
+    $data['image'] = array_merge($data['image'], $image_data);
+    $data['image_id'] = 0;
+
+    return $data;
+}
+
+add_filter('woocommerce_available_variation', 'syncmaster_apply_external_variation_image', 10, 3);
+
 function syncmaster_get_last_sync_time() {
     $logs = syncmaster_get_logs();
     if (empty($logs)) {
