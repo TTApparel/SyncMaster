@@ -203,7 +203,7 @@ function syncmaster_render_products() {
                     <?php $colors = syncmaster_get_style_colors($style['title']); ?>
                     <?php $has_color_selection = array_key_exists($item['sku'], $color_selections); ?>
                     <?php $selected_colors = $color_selections[$item['sku']] ?? array(); ?>
-                    <?php $margin_percent = $margin_settings[$item['sku']] ?? 50; ?>
+                    <?php $margin_percent = syncmaster_get_margin_percent_for_sku($item['sku'], 50); ?>
                     <?php $panel_id = 'syncmaster-colors-' . esc_attr($item['sku']); ?>
                     <li class="syncmaster-monitored-item">
                         <div class="syncmaster-monitored-header">
