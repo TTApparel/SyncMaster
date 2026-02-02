@@ -59,6 +59,7 @@ add_action('admin_post_syncmaster_save_colors', 'syncmaster_handle_save_colors')
 add_action('admin_post_syncmaster_save_margin', 'syncmaster_handle_save_margin');
 
 add_action('syncmaster_cron_sync', 'syncmaster_run_scheduled_sync');
+add_action('wp_enqueue_scripts', 'syncmaster_enqueue_frontend_assets');
 
 add_filter('cron_schedules', 'syncmaster_register_cron_schedule');
 
@@ -130,5 +131,31 @@ function syncmaster_enqueue_admin_assets($hook) {
         array('jquery'),
         SYNCMASTER_VERSION,
         true
+    );
+}
+
+function syncmaster_enqueue_frontend_assets() {
+    if (!function_exists('is_product') || !is_product()) {
+        return;
+    }
+
+    wp_enqueue_script(
+        'syncmaster-frontend',
+        SYNCMASTER_PLUGIN_URL . 'assets/frontend.js',
+        array('jquery'),
+        SYNCMASTER_VERSION,
+        true
+    );
+
+    $color_taxonomy = function_exists('syncmaster_get_color_taxonomy')
+        ? syncmaster_get_color_taxonomy()
+        : 'pa_color';
+
+    wp_localize_script(
+        'syncmaster-frontend',
+        'syncmasterVariationImages',
+        array(
+            'colorAttribute' => 'attribute_' . $color_taxonomy,
+        )
     );
 }
