@@ -705,7 +705,7 @@ function syncmaster_set_product_category($product_id, $category_name) {
         return;
     }
 
-    $raw_categories = explode(' - ', $category_name);
+    $raw_categories = preg_split('/\s*-\s*/', $category_name);
     $categories = array();
     foreach ($raw_categories as $category) {
         $category = trim((string) $category);
