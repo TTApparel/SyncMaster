@@ -148,12 +148,18 @@ function syncmaster_render_products() {
     }
     $monitored = syncmaster_get_monitored_products();
     $color_selections = syncmaster_get_color_selections();
+    $margin_settings = syncmaster_get_margin_settings();
 
     ob_start();
     ?>
     <?php if (!empty($_GET['colors_saved'])) : ?>
         <div class="notice notice-success is-dismissible">
             <p><?php echo esc_html__('Color preferences updated.', 'syncmaster'); ?></p>
+        </div>
+    <?php endif; ?>
+    <?php if (!empty($_GET['margin_saved'])) : ?>
+        <div class="notice notice-success is-dismissible">
+            <p><?php echo esc_html__('Margin updated.', 'syncmaster'); ?></p>
         </div>
     <?php endif; ?>
     <section class="syncmaster-card">
