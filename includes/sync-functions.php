@@ -970,6 +970,29 @@ function syncmaster_apply_external_variation_image($data, $product, $variation) 
 
 add_filter('woocommerce_available_variation', 'syncmaster_apply_external_variation_image', 10, 3);
 
+function syncmaster_render_admin_variation_thumb($image, $variation_id = 0, $variation = null) {
+    $product = null;
+    if ($variation instanceof WC_Product) {
+        $product = $variation;
+    } elseif ($variation_id) {
+        $product = wc_get_product($variation_id);
+    }
+
+    $image_url = syncmaster_get_external_image_url($product);
+    if ($image_url === '') {
+        return $image;
+    }
+
+    $alt = $product ? $product->get_name() : '';
+    return sprintf(
+        '<img src="%s" alt="%s" class="attachment-thumbnail size-thumbnail" width="60" height="60" />',
+        esc_url($image_url),
+        esc_attr($alt)
+    );
+}
+
+add_filter('woocommerce_admin_variation_thumb', 'syncmaster_render_admin_variation_thumb', 10, 3);
+
 function syncmaster_get_last_sync_time() {
     $logs = syncmaster_get_logs();
     if (empty($logs)) {
