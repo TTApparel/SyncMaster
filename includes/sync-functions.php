@@ -269,6 +269,17 @@ function syncmaster_get_color_taxonomy() {
     return $taxonomy;
 }
 
+function syncmaster_normalize_ss_image_url($image_url) {
+    $image_url = trim((string) $image_url);
+    if ($image_url === '') {
+        return '';
+    }
+    if (strpos($image_url, 'http') !== 0) {
+        return 'https://cdn.ssactivewear.com/' . ltrim($image_url, '/');
+    }
+    return $image_url;
+}
+
 function syncmaster_get_size_taxonomy() {
     $taxonomy = function_exists('wc_attribute_taxonomy_name')
         ? wc_attribute_taxonomy_name('size')
@@ -373,7 +384,13 @@ function syncmaster_resolve_color_term_ids($colors, $selected_colors = array()) 
         return array();
     }
 
-    return syncmaster_resolve_attribute_term_ids($candidate_names, $taxonomy);
+    $term_ids = syncmaster_resolve_attribute_term_ids($candidate_names, $taxonomy);
+    $swatch_map = syncmaster_collect_color_swatch_map($colors);
+    if (!empty($swatch_map)) {
+        syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, $swatch_map);
+    }
+
+    return $term_ids;
 }
 
 function syncmaster_apply_color_attributes($product, $term_ids, $taxonomy, $is_variable) {
@@ -599,13 +616,9 @@ function syncmaster_collect_color_size_image_map($colors, $selected_colors = arr
         if (!empty($selected_colors) && !in_array($color_name, $selected_colors, true)) {
             continue;
         }
-        $image_url = $color['colorFrontImage'] ?? '';
-        $image_url = trim((string) $image_url);
+        $image_url = syncmaster_normalize_ss_image_url($color['colorFrontImage'] ?? '');
         if ($image_url === '') {
             continue;
-        }
-        if (strpos($image_url, 'http') !== 0) {
-            $image_url = 'https://cdn.ssactivewear.com/' . ltrim($image_url, '/');
         }
         $raw_size_skus = $color['sizeSkus'] ?? array();
         if (!is_array($raw_size_skus)) {
@@ -621,6 +634,75 @@ function syncmaster_collect_color_size_image_map($colors, $selected_colors = arr
     }
 
     return $map;
+}
+
+function syncmaster_collect_color_swatch_map($colors) {
+    $map = array();
+    foreach ($colors as $color) {
+        $color_name = $color['colorName'] ?? '';
+        $color_name = sanitize_text_field($color_name);
+        if ($color_name === '') {
+            continue;
+        }
+        $image_url = syncmaster_normalize_ss_image_url($color['colorSwatchImage'] ?? '');
+        if ($image_url !== '') {
+            $map[$color_name] = $image_url;
+        }
+    }
+
+    return $map;
+}
+
+function syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, $swatch_map) {
+    if (empty($candidate_names) || empty($swatch_map)) {
+        return;
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    require_once ABSPATH . 'wp-admin/includes/media.php';
+    require_once ABSPATH . 'wp-admin/includes/image.php';
+
+    foreach ($candidate_names as $name) {
+        $name = sanitize_text_field($name);
+        if ($name === '') {
+            continue;
+        }
+        $image_url = $swatch_map[$name] ?? '';
+        if ($image_url === '') {
+            continue;
+        }
+        $term = get_term_by('name', $name, $taxonomy);
+        if (!$term) {
+            $term = get_term_by('slug', sanitize_title($name), $taxonomy);
+        }
+        if (!$term || is_wp_error($term)) {
+            continue;
+        }
+        $term_id = (int) $term->term_id;
+        $existing_src = get_term_meta($term_id, 'smart-swatches-framework--src', true);
+        $existing_id = get_term_meta($term_id, 'smart-swatches-framework--id', true);
+        $existing_swatch_url = get_term_meta($term_id, 'smart_swatch_image', true);
+        $existing_swatch_id = get_term_meta($term_id, 'smart_swatch_image_id', true);
+        if (!empty($existing_src) && !empty($existing_id) && !empty($existing_swatch_url) && !empty($existing_swatch_id)) {
+            continue;
+        }
+        $attachment_id = media_sideload_image($image_url, 0, null, 'id');
+        if (is_wp_error($attachment_id)) {
+            continue;
+        }
+        $attachment_url = wp_get_attachment_url($attachment_id);
+        if ($attachment_url) {
+            update_term_meta($term_id, 'smart-swatches-framework--src', esc_url_raw($attachment_url));
+            update_term_meta($term_id, 'smart-swatches-framework--id', (int) $attachment_id);
+            if (get_term_meta($term_id, 'smart-swatches-framework--library', true) === '') {
+                update_term_meta($term_id, 'smart-swatches-framework--library', 'image');
+            }
+            update_term_meta($term_id, 'smart_swatch_image', esc_url_raw($attachment_url));
+            update_term_meta($term_id, 'smart_swatch_image_id', (int) $attachment_id);
+            update_term_meta($term_id, 'smart_swatches_image', esc_url_raw($attachment_url));
+            update_term_meta($term_id, 'smart_swatches_image_id', (int) $attachment_id);
+        }
+    }
 }
 
 function syncmaster_round_up_price($price, $increment = 0.25) {
@@ -739,12 +821,9 @@ function syncmaster_set_product_category($product_id, $category_name) {
 }
 
 function syncmaster_set_featured_image($product_id, $image_url) {
+    $image_url = syncmaster_normalize_ss_image_url($image_url);
     if ($image_url === '') {
         return;
-    }
-
-    if (strpos($image_url, 'http') !== 0) {
-        $image_url = 'https://cdn.ssactivewear.com/' . ltrim($image_url, '/');
     }
 
     if (has_post_thumbnail($product_id)) {
@@ -1251,6 +1330,7 @@ function syncmaster_get_style_colors($style_title) {
                         'colorCode' => $color_code,
                         'colorName' => syncmaster_extract_scalar($item['colorName'] ?? ($item['ColorName'] ?? '')),
                         'colorFrontImage' => syncmaster_extract_scalar($item['colorFrontImage'] ?? ($item['ColorFrontImage'] ?? '')),
+                        'colorSwatchImage' => syncmaster_extract_scalar($item['colorSwatchImage'] ?? ($item['ColorSwatchImage'] ?? '')),
                         'sizeNames' => array(),
                         'sizeSkus' => array(),
                         'sizePrices' => array(),
