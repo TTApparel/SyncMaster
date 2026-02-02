@@ -679,9 +679,8 @@ function syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, 
             continue;
         }
         $term_id = (int) $term->term_id;
-        $existing_src = get_term_meta($term_id, 'smart-swatches-framework--src', true);
-        $existing_id = get_term_meta($term_id, 'smart-swatches-framework--id', true);
-        if (!empty($existing_src) && !empty($existing_id)) {
+        $existing = get_term_meta($term_id, 'smart-swatches-framework--src', true);
+        if (!empty($existing)) {
             continue;
         }
         $attachment_id = media_sideload_image($image_url, 0, null, 'id');
@@ -691,10 +690,6 @@ function syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, 
         $attachment_url = wp_get_attachment_url($attachment_id);
         if ($attachment_url) {
             update_term_meta($term_id, 'smart-swatches-framework--src', esc_url_raw($attachment_url));
-            update_term_meta($term_id, 'smart-swatches-framework--id', (int) $attachment_id);
-            if (get_term_meta($term_id, 'smart-swatches-framework--library', true) === '') {
-                update_term_meta($term_id, 'smart-swatches-framework--library', 'image');
-            }
         }
     }
 }
