@@ -662,7 +662,6 @@ function syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, 
     require_once ABSPATH . 'wp-admin/includes/media.php';
     require_once ABSPATH . 'wp-admin/includes/image.php';
 
-    $ssp_meta_key = sprintf('ssp_attribute_options_%s', $taxonomy);
     foreach ($candidate_names as $name) {
         $name = sanitize_text_field($name);
         if ($name === '') {
@@ -680,11 +679,8 @@ function syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, 
             continue;
         }
         $term_id = (int) $term->term_id;
-        $existing_src = get_term_meta($term_id, 'smart-swatches-framework--src', true);
-        $existing_id = get_term_meta($term_id, 'smart-swatches-framework--id', true);
-        $existing_swatch_url = get_term_meta($term_id, 'smart_swatch_image', true);
-        $existing_swatch_id = get_term_meta($term_id, 'smart_swatch_image_id', true);
-        if (!empty($existing_src) && !empty($existing_id) && !empty($existing_swatch_url) && !empty($existing_swatch_id)) {
+        $existing = get_term_meta($term_id, 'smart-swatches-framework--src', true);
+        if (!empty($existing)) {
             continue;
         }
         $attachment_id = media_sideload_image($image_url, 0, null, 'id');
@@ -694,28 +690,6 @@ function syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, 
         $attachment_url = wp_get_attachment_url($attachment_id);
         if ($attachment_url) {
             update_term_meta($term_id, 'smart-swatches-framework--src', esc_url_raw($attachment_url));
-            update_term_meta($term_id, 'smart-swatches-framework--id', (int) $attachment_id);
-            if (get_term_meta($term_id, 'smart-swatches-framework--library', true) === '') {
-                update_term_meta($term_id, 'smart-swatches-framework--library', 'image');
-            }
-            update_term_meta($term_id, 'smart_swatch_image', esc_url_raw($attachment_url));
-            update_term_meta($term_id, 'smart_swatch_image_id', (int) $attachment_id);
-            update_term_meta($term_id, 'smart_swatches_image', esc_url_raw($attachment_url));
-            update_term_meta($term_id, 'smart_swatches_image_id', (int) $attachment_id);
-
-            $ssp_meta = get_term_meta($term_id, $ssp_meta_key, true);
-            if (is_string($ssp_meta)) {
-                $maybe_unserialized = maybe_unserialize($ssp_meta);
-                if ($maybe_unserialized !== $ssp_meta) {
-                    $ssp_meta = $maybe_unserialized;
-                }
-            }
-            if (!is_array($ssp_meta)) {
-                $ssp_meta = array();
-            }
-            $ssp_meta['smart_swatch_image'] = esc_url_raw($attachment_url);
-            $ssp_meta['smart_swatch_image_id'] = (int) $attachment_id;
-            update_term_meta($term_id, $ssp_meta_key, $ssp_meta);
         }
     }
 }
