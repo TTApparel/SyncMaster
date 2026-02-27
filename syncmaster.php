@@ -59,6 +59,7 @@ add_action('admin_post_syncmaster_save_colors', 'syncmaster_handle_save_colors')
 add_action('admin_post_syncmaster_save_margin', 'syncmaster_handle_save_margin');
 
 add_action('syncmaster_cron_sync', 'syncmaster_run_scheduled_sync');
+add_action('init', 'syncmaster_ensure_cron_configuration');
 add_action('wp_enqueue_scripts', 'syncmaster_enqueue_frontend_assets');
 
 add_filter('cron_schedules', 'syncmaster_register_cron_schedule');
@@ -78,6 +79,22 @@ function syncmaster_register_cron_schedule($schedules) {
 function syncmaster_schedule_cron() {
     if (!wp_next_scheduled('syncmaster_cron_sync')) {
         wp_schedule_event(time() + 300, 'syncmaster_interval', 'syncmaster_cron_sync');
+        update_option('syncmaster_cron_interval_applied', (int) get_option('sync_interval_minutes', 60));
+    }
+}
+
+function syncmaster_ensure_cron_configuration() {
+    $configured_interval = (int) get_option('sync_interval_minutes', 60);
+    $applied_interval = (int) get_option('syncmaster_cron_interval_applied', 0);
+
+    if (!wp_next_scheduled('syncmaster_cron_sync')) {
+        syncmaster_schedule_cron();
+        return;
+    }
+
+    if ($applied_interval !== $configured_interval) {
+        syncmaster_reschedule_cron();
+        update_option('syncmaster_cron_interval_applied', $configured_interval);
     }
 }
 
