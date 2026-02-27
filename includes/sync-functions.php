@@ -980,6 +980,13 @@ function syncmaster_sync_monitored_products() {
         $api_item = syncmaster_fetch_ss_product($sku);
         if (empty($api_item)) {
             $fail++;
+            syncmaster_write_log(
+                'error',
+                sprintf(__('Sync failed for SKU %s: no API data returned.', 'syncmaster'), $sku),
+                0,
+                1,
+                array('sku' => $sku, 'reason' => 'empty_api_item')
+            );
             continue;
         }
         $mapped = syncmaster_map_product_data($api_item);
@@ -1015,6 +1022,13 @@ function syncmaster_sync_monitored_products() {
 
         if (!$product) {
             $fail++;
+            syncmaster_write_log(
+                'error',
+                sprintf(__('Sync failed for SKU %s: could not initialize WooCommerce product object.', 'syncmaster'), $sku),
+                0,
+                1,
+                array('sku' => $sku, 'reason' => 'product_init_failed', 'is_variable' => $is_variable)
+            );
             continue;
         }
 
@@ -1023,6 +1037,13 @@ function syncmaster_sync_monitored_products() {
         $existing_id = wc_get_product_id_by_sku($desired_sku);
         if ($existing_id && $existing_id !== $product_id) {
             $fail++;
+            syncmaster_write_log(
+                'error',
+                sprintf(__('Sync failed for SKU %s: mapped SKU %s is already used by product ID %d.', 'syncmaster'), $sku, $desired_sku, (int) $existing_id),
+                0,
+                1,
+                array('sku' => $sku, 'desired_sku' => $desired_sku, 'conflicting_product_id' => (int) $existing_id, 'reason' => 'duplicate_sku')
+            );
             continue;
         }
         $product->set_sku($desired_sku);
@@ -1068,8 +1089,36 @@ function syncmaster_sync_monitored_products() {
             } else {
                 $created++;
             }
+            syncmaster_write_log(
+                'info',
+                sprintf(__('Synced SKU %s successfully.', 'syncmaster'), $sku),
+                1,
+                0,
+                array(
+                    'sku' => $sku,
+                    'product_id' => (int) $saved_id,
+                    'product_type' => $is_variable ? 'variable' : 'simple',
+                    'selected_colors_count' => count($selected_colors),
+                    'resolved_colors_count' => count($color_term_ids),
+                    'resolved_sizes_count' => count($size_term_ids),
+                    'variations_target_count' => array_sum(array_map('count', $color_size_map)),
+                    'threaddesk_color_views_count' => count($color_postbox_view_map),
+                )
+            );
         } else {
             $fail++;
+            syncmaster_write_log(
+                'error',
+                sprintf(__('Sync failed for SKU %s: product save returned no ID.', 'syncmaster'), $sku),
+                0,
+                1,
+                array(
+                    'sku' => $sku,
+                    'desired_sku' => $desired_sku,
+                    'product_type' => $is_variable ? 'variable' : 'simple',
+                    'reason' => 'save_failed',
+                )
+            );
         }
     }
 
@@ -1109,7 +1158,7 @@ function syncmaster_write_log($level, $message, $success_count = 0, $fail_count 
 function syncmaster_get_logs() {
     global $wpdb;
     $table = $wpdb->prefix . SYNCMASTER_LOGS_TABLE;
-    return $wpdb->get_results("SELECT log_time, level, message, success_count, fail_count FROM {$table} ORDER BY log_time DESC LIMIT 50", ARRAY_A);
+    return $wpdb->get_results("SELECT log_time, level, message, success_count, fail_count, context_json FROM {$table} ORDER BY log_time DESC LIMIT 50", ARRAY_A);
 }
 
 function syncmaster_get_external_image_url($product) {
