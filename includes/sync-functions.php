@@ -149,7 +149,7 @@ function syncmaster_handle_sync_now() {
     check_admin_referer('syncmaster_sync_now');
 
     syncmaster_write_log('info', __('Manual sync triggered.', 'syncmaster'), 0, 0, array('source' => 'manual'));
-    syncmaster_run_sync_placeholder();
+    syncmaster_run_sync_placeholder('manual');
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&synced=1'));
     exit;
@@ -157,23 +157,60 @@ function syncmaster_handle_sync_now() {
 
 function syncmaster_run_scheduled_sync() {
     syncmaster_write_log('info', __('Scheduled sync triggered.', 'syncmaster'), 0, 0, array('source' => 'cron'));
-    syncmaster_run_sync_placeholder();
+    syncmaster_run_sync_placeholder('cron');
 }
 
-function syncmaster_run_sync_placeholder() {
+function syncmaster_run_sync_placeholder($source = 'unknown') {
+    $started_at = time();
     $results = syncmaster_sync_monitored_products();
+    update_option('syncmaster_last_sync_run_ts', $started_at);
+    update_option('syncmaster_last_sync_status', sanitize_text_field($results['status']));
+
     syncmaster_write_log(
         $results['status'],
         $results['message'],
         $results['success'],
         $results['fail'],
         array(
+            'source' => sanitize_text_field($source),
+            'started_at' => gmdate('c', $started_at),
             'duration' => rand(10, 40),
             'monitored' => $results['monitored'],
             'created' => $results['created'],
             'updated' => $results['updated'],
         )
     );
+}
+
+function syncmaster_maybe_run_interval_sync() {
+    if (wp_doing_cron() || wp_doing_ajax()) {
+        return;
+    }
+
+    $lock_key = 'syncmaster_interval_sync_lock';
+    if (get_transient($lock_key)) {
+        return;
+    }
+
+    $interval_minutes = (int) get_option('sync_interval_minutes', 60);
+    if ($interval_minutes < 5) {
+        $interval_minutes = 5;
+    }
+
+    $interval_seconds = $interval_minutes * 60;
+    $last_run = (int) get_option('syncmaster_last_sync_run_ts', 0);
+    if ($last_run > 0 && (time() - $last_run) < $interval_seconds) {
+        return;
+    }
+
+    set_transient($lock_key, 1, 5 * MINUTE_IN_SECONDS);
+    syncmaster_write_log('info', __('Interval sync fallback triggered.', 'syncmaster'), 0, 0, array(
+        'source' => 'interval_fallback',
+        'last_run' => $last_run,
+        'interval_seconds' => $interval_seconds,
+    ));
+    syncmaster_run_sync_placeholder('interval_fallback');
+    delete_transient($lock_key);
 }
 
 function syncmaster_fetch_ss_product($sku) {
@@ -636,6 +673,101 @@ function syncmaster_collect_color_size_image_map($colors, $selected_colors = arr
     return $map;
 }
 
+function syncmaster_collect_color_postbox_view_map($colors, $selected_colors = array(), $color_taxonomy = null) {
+    $map = array();
+    $taxonomy = $color_taxonomy ?: syncmaster_get_color_taxonomy();
+
+    foreach ($colors as $color) {
+        $color_name = sanitize_text_field($color['colorName'] ?? '');
+        if ($color_name === '') {
+            continue;
+        }
+        if (!empty($selected_colors) && !in_array($color_name, $selected_colors, true)) {
+            continue;
+        }
+
+        $color_slug = syncmaster_get_attribute_term_slug($color_name, $taxonomy);
+        if ($color_slug === '') {
+            continue;
+        }
+
+        $front_image = syncmaster_normalize_ss_image_url($color['colorFrontImage'] ?? '');
+        $back_image = syncmaster_normalize_ss_image_url($color['colorBackImage'] ?? '');
+        $direct_side_image = syncmaster_normalize_ss_image_url($color['colorDirectSideImage'] ?? '');
+        $side_image = syncmaster_normalize_ss_image_url($color['colorSideImage'] ?? '');
+        if ($direct_side_image !== '') {
+            $side_image = $direct_side_image;
+        }
+        if ($side_image === '') {
+            $side_image = $back_image;
+        }
+
+        if ($front_image === '' && $back_image === '' && $side_image === '') {
+            continue;
+        }
+
+        $map[$color_slug] = array(
+            'front' => $front_image,
+            'back' => $back_image,
+            'side' => $side_image,
+        );
+    }
+
+    return $map;
+}
+
+function syncmaster_update_threaddesk_product_postbox($product_id, $color_postbox_view_map) {
+    if (!$product_id || empty($color_postbox_view_map) || !is_array($color_postbox_view_map)) {
+        return;
+    }
+
+    $existing = get_post_meta($product_id, 'tta_threaddesk_product_postbox', true);
+    $postbox = is_array($existing) ? $existing : array();
+    $postbox['colors'] = isset($postbox['colors']) && is_array($postbox['colors'])
+        ? $postbox['colors']
+        : array();
+
+    foreach ($color_postbox_view_map as $color_slug => $views) {
+        $color_slug = sanitize_title($color_slug);
+        if ($color_slug === '' || !is_array($views)) {
+            continue;
+        }
+
+        $front_image = esc_url_raw($views['front'] ?? '');
+        $back_image = esc_url_raw($views['back'] ?? '');
+        $side_image = esc_url_raw($views['side'] ?? '');
+
+        if ($front_image === '' && $back_image === '' && $side_image === '') {
+            continue;
+        }
+
+        $current = $postbox['colors'][$color_slug] ?? array();
+        if (!is_array($current)) {
+            $current = array();
+        }
+
+        if ($front_image !== '') {
+            $current['front_image'] = $front_image;
+            $current['front_fallback_url'] = $front_image;
+        }
+        if ($back_image !== '') {
+            $current['back_image'] = $back_image;
+            $current['back_fallback_url'] = $back_image;
+        }
+        if ($side_image !== '') {
+            $current['side_image'] = $side_image;
+            $current['side_fallback_url'] = $side_image;
+        }
+        if (empty($current['side_label']) || !in_array($current['side_label'], array('left', 'right'), true)) {
+            $current['side_label'] = 'left';
+        }
+
+        $postbox['colors'][$color_slug] = $current;
+    }
+
+    update_post_meta($product_id, 'tta_threaddesk_product_postbox', $postbox);
+}
+
 function syncmaster_collect_color_swatch_map($colors) {
     $map = array();
     foreach ($colors as $color) {
@@ -694,6 +826,46 @@ function syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, 
     }
 }
 
+function syncmaster_calculate_simple_inventory_qty($color_size_qty_map) {
+    $total_qty = 0;
+    foreach ((array) $color_size_qty_map as $size_qtys) {
+        if (!is_array($size_qtys)) {
+            continue;
+        }
+        foreach ($size_qtys as $qty) {
+            $total_qty += (int) $qty;
+        }
+    }
+
+    return max(0, (int) $total_qty);
+}
+
+function syncmaster_calculate_simple_sell_price($color_size_price_map, $margin_percent) {
+    $customer_price = 0;
+    foreach ((array) $color_size_price_map as $size_prices) {
+        if (!is_array($size_prices)) {
+            continue;
+        }
+        foreach ($size_prices as $price) {
+            $price = (float) $price;
+            if ($price > 0) {
+                $customer_price = $price;
+                break 2;
+            }
+        }
+    }
+
+    if ($customer_price <= 0) {
+        return '';
+    }
+
+    $margin_multiplier = max(((float) $margin_percent) / 100, 0.01);
+    $sell_price = $customer_price / $margin_multiplier;
+    $sell_price = syncmaster_round_up_price($sell_price, 0.25);
+
+    return function_exists('wc_format_decimal') ? wc_format_decimal($sell_price) : $sell_price;
+}
+
 function syncmaster_round_up_price($price, $increment = 0.25) {
     $increment = (float) $increment;
     if ($increment <= 0) {
@@ -704,27 +876,53 @@ function syncmaster_round_up_price($price, $increment = 0.25) {
 }
 
 function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $color_size_sku_map, $color_size_qty_map, $color_size_price_map, $color_size_image_map, $color_taxonomy, $size_taxonomy, $margin_percent) {
+    $stats = array(
+        'created' => 0,
+        'deleted' => 0,
+        'skipped' => 0,
+        'errors' => array(),
+        'attempted' => 0,
+    );
+
     if (empty($color_size_map)) {
-        return;
+        $stats['errors'][] = 'empty_color_size_map';
+        return $stats;
     }
 
     $product = wc_get_product($product_id);
-    if (!$product || !$product->is_type('variable')) {
-        return;
+    if (!$product) {
+        $stats['errors'][] = 'missing_parent_product';
+        return $stats;
+    }
+
+    if (!$product->is_type('variable')) {
+        syncmaster_set_product_type_term($product_id, true);
+        clean_post_cache($product_id);
+        $product = wc_get_product($product_id);
+        if (!$product || !$product->is_type('variable')) {
+            $stats['errors'][] = 'parent_not_variable';
+            return $stats;
+        }
     }
 
     foreach ($product->get_children() as $child_id) {
         wp_delete_post($child_id, true);
+        $stats['deleted']++;
     }
 
     foreach ($color_size_map as $color_name => $size_names) {
         $color_slug = syncmaster_get_attribute_term_slug($color_name, $color_taxonomy);
         if ($color_slug === '') {
+            $stats['skipped']++;
+            $stats['errors'][] = 'missing_color_slug:' . $color_name;
             continue;
         }
         foreach ($size_names as $size_name) {
+            $stats['attempted']++;
             $size_slug = syncmaster_get_attribute_term_slug($size_name, $size_taxonomy);
             if ($size_slug === '') {
+                $stats['skipped']++;
+                $stats['errors'][] = 'missing_size_slug:' . $size_name;
                 continue;
             }
             $variation = new WC_Product_Variation();
@@ -743,7 +941,8 @@ function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $co
                     $size_slug,
                 ));
                 if (!empty($variation_sku_parts)) {
-                    $variation->set_sku(implode('-', $variation_sku_parts));
+                    $variation_sku = implode('-', $variation_sku_parts);
+                    $variation->set_sku($variation_sku);
                 }
             }
             if ($variation_sku !== '' && isset($color_size_image_map[$variation_sku])) {
@@ -765,9 +964,18 @@ function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $co
                 $variation->set_price($variation_price);
             }
             $variation->set_status('publish');
-            $variation->save();
+
+            $saved_variation_id = $variation->save();
+            if ($saved_variation_id) {
+                $stats['created']++;
+            } else {
+                $stats['skipped']++;
+                $stats['errors'][] = 'variation_save_failed:' . $color_name . ':' . $size_name;
+            }
         }
     }
+
+    return $stats;
 }
 
 function syncmaster_set_product_category($product_id, $category_name) {
@@ -807,6 +1015,33 @@ function syncmaster_set_product_category($product_id, $category_name) {
     if (!empty($term_ids)) {
         wp_set_object_terms($product_id, $term_ids, 'product_cat', false);
     }
+}
+
+
+function syncmaster_get_object_term_ids($object_id, $taxonomy) {
+    if (!$object_id || !taxonomy_exists($taxonomy)) {
+        return array();
+    }
+
+    $terms = wp_get_object_terms((int) $object_id, $taxonomy, array('fields' => 'ids'));
+    if (is_wp_error($terms) || !is_array($terms)) {
+        return array();
+    }
+
+    return array_values(array_map('intval', $terms));
+}
+
+function syncmaster_set_product_type_term($product_id, $is_variable) {
+    if (!$product_id || !taxonomy_exists('product_type')) {
+        return;
+    }
+
+    wp_set_object_terms(
+        (int) $product_id,
+        $is_variable ? 'variable' : 'simple',
+        'product_type',
+        false
+    );
 }
 
 function syncmaster_set_featured_image($product_id, $image_url) {
@@ -858,14 +1093,53 @@ function syncmaster_sync_monitored_products() {
         $api_item = syncmaster_fetch_ss_product($sku);
         if (empty($api_item)) {
             $fail++;
+            syncmaster_write_log(
+                'error',
+                sprintf(__('Sync failed for SKU %s: no API data returned.', 'syncmaster'), $sku),
+                0,
+                1,
+                array('sku' => $sku, 'reason' => 'empty_api_item')
+            );
             continue;
         }
         $mapped = syncmaster_map_product_data($api_item);
-        $product_id = wc_get_product_id_by_sku($sku);
+        $desired_sku = $mapped['sku'] !== '' ? $mapped['sku'] : $sku;
+        $product_id_by_monitored_sku = wc_get_product_id_by_sku($sku);
+        $product_id_by_desired_sku = $desired_sku !== '' ? wc_get_product_id_by_sku($desired_sku) : 0;
+        $product_id = $product_id_by_monitored_sku;
+        $product_match_source = $product_id ? 'monitored_sku' : 'new_product';
+
+        if (!$product_id && $product_id_by_desired_sku) {
+            $product_id = $product_id_by_desired_sku;
+            $product_match_source = 'desired_sku';
+        }
+
+        if ($product_id_by_monitored_sku && $product_id_by_desired_sku && $product_id_by_monitored_sku !== $product_id_by_desired_sku) {
+            $fail++;
+            syncmaster_write_log(
+                'error',
+                sprintf(__('Sync failed for SKU %s: monitored SKU and mapped SKU resolve to different products.', 'syncmaster'), $sku),
+                0,
+                1,
+                array(
+                    'sku' => $sku,
+                    'desired_sku' => $desired_sku,
+                    'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku,
+                    'product_id_by_desired_sku' => (int) $product_id_by_desired_sku,
+                    'reason' => 'sku_resolution_conflict',
+                )
+            );
+            continue;
+        }
+
         $style_title = trim(($api_item['brandName'] ?? '') . ' ' . ($api_item['styleName'] ?? ''));
         $colors = $style_title !== '' ? syncmaster_get_style_colors($style_title) : array();
         $selected_colors = $color_selections[$sku] ?? array();
         $color_term_ids = syncmaster_resolve_color_term_ids($colors, $selected_colors);
+        $existing_color_term_ids = $product_id ? syncmaster_get_object_term_ids($product_id, $color_taxonomy) : array();
+        if (!empty($existing_color_term_ids) && !empty($color_term_ids)) {
+            $color_term_ids = array_values(array_unique(array_merge($existing_color_term_ids, $color_term_ids)));
+        }
         $color_size_map = syncmaster_collect_color_size_map($colors, $selected_colors);
         $color_size_sku_map = syncmaster_collect_color_size_sku_map($colors, $selected_colors);
         $color_size_qty_map = syncmaster_collect_color_size_qty_map($colors, $selected_colors);
@@ -873,9 +1147,15 @@ function syncmaster_sync_monitored_products() {
         $size_names = syncmaster_collect_size_names($colors, $selected_colors);
         $size_term_ids = syncmaster_resolve_attribute_term_ids($size_names, $size_taxonomy);
         $is_variable = count($color_term_ids) > 1 || count($size_term_ids) > 1;
+        $has_new_toggled_colors = !empty(array_diff($color_term_ids, $existing_color_term_ids));
+        if ($has_new_toggled_colors) {
+            $is_variable = true;
+        }
         $margin_percent = syncmaster_get_margin_percent_for_sku($sku, 50);
         $color_size_image_map = syncmaster_collect_color_size_image_map($colors, $selected_colors);
+        $color_postbox_view_map = syncmaster_collect_color_postbox_view_map($colors, $selected_colors, $color_taxonomy);
         if ($product_id) {
+            syncmaster_set_product_type_term($product_id, $is_variable);
             $product = $is_variable ? new WC_Product_Variable($product_id) : new WC_Product_Simple($product_id);
         } else {
             $product = $is_variable ? new WC_Product_Variable() : new WC_Product_Simple();
@@ -883,14 +1163,27 @@ function syncmaster_sync_monitored_products() {
 
         if (!$product) {
             $fail++;
+            syncmaster_write_log(
+                'error',
+                sprintf(__('Sync failed for SKU %s: could not initialize WooCommerce product object.', 'syncmaster'), $sku),
+                0,
+                1,
+                array('sku' => $sku, 'reason' => 'product_init_failed', 'is_variable' => $is_variable, 'desired_sku' => $desired_sku, 'product_match_source' => $product_match_source, 'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku, 'product_id_by_desired_sku' => (int) $product_id_by_desired_sku)
+            );
             continue;
         }
 
         $product->set_name($mapped['name'] !== '' ? $mapped['name'] : sprintf(__('Synced SKU %s', 'syncmaster'), $sku));
-        $desired_sku = $mapped['sku'] !== '' ? $mapped['sku'] : $sku;
         $existing_id = wc_get_product_id_by_sku($desired_sku);
         if ($existing_id && $existing_id !== $product_id) {
             $fail++;
+            syncmaster_write_log(
+                'error',
+                sprintf(__('Sync failed for SKU %s: mapped SKU %s is already used by product ID %d.', 'syncmaster'), $sku, $desired_sku, (int) $existing_id),
+                0,
+                1,
+                array('sku' => $sku, 'desired_sku' => $desired_sku, 'conflicting_product_id' => (int) $existing_id, 'product_id' => (int) $product_id, 'product_match_source' => $product_match_source, 'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku, 'product_id_by_desired_sku' => (int) $product_id_by_desired_sku, 'reason' => 'duplicate_sku')
+            );
             continue;
         }
         $product->set_sku($desired_sku);
@@ -903,18 +1196,41 @@ function syncmaster_sync_monitored_products() {
         $product->set_status('publish');
         syncmaster_apply_color_attributes($product, $color_term_ids, $color_taxonomy, $is_variable);
         syncmaster_apply_size_attributes($product, $size_term_ids, $size_taxonomy, $is_variable);
+        if (!$is_variable) {
+            $simple_qty = syncmaster_calculate_simple_inventory_qty($color_size_qty_map);
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity($simple_qty);
+            $product->set_stock_status($simple_qty > 0 ? 'instock' : 'outofstock');
+
+            $simple_price = syncmaster_calculate_simple_sell_price($color_size_price_map, $margin_percent);
+            if ($simple_price !== '') {
+                $product->set_regular_price($simple_price);
+                $product->set_price($simple_price);
+            }
+        }
         $saved_id = $product->save();
+
+        $variation_stats = array(
+            'created' => 0,
+            'deleted' => 0,
+            'skipped' => 0,
+            'errors' => array(),
+            'attempted' => 0,
+        );
 
         if ($saved_id) {
             syncmaster_assign_color_terms($saved_id, $color_term_ids, $color_taxonomy);
             syncmaster_assign_size_terms($saved_id, $size_term_ids, $size_taxonomy);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
-            syncmaster_set_product_category($saved_id, $mapped['category']);
+            if (!$product_id) {
+                syncmaster_set_product_category($saved_id, $mapped['category']);
+            }
+            syncmaster_update_threaddesk_product_postbox($saved_id, $color_postbox_view_map);
             if ($mapped['image'] !== '') {
                 syncmaster_set_featured_image($saved_id, $mapped['image']);
             }
             if ($is_variable) {
-                syncmaster_sync_variations(
+                $variation_stats = syncmaster_sync_variations(
                     $saved_id,
                     $desired_sku,
                     $color_size_map,
@@ -926,6 +1242,21 @@ function syncmaster_sync_monitored_products() {
                     $size_taxonomy,
                     $margin_percent
                 );
+                if (!empty($variation_stats['errors'])) {
+                    syncmaster_write_log(
+                        'error',
+                        sprintf(__('Variation sync warnings for SKU %s.', 'syncmaster'), $sku),
+                        (int) ($variation_stats['created'] ?? 0),
+                        (int) ($variation_stats['skipped'] ?? 0),
+                        array(
+                            'sku' => $sku,
+                            'product_id' => (int) $saved_id,
+                            'variation_stats' => $variation_stats,
+                            'selected_colors' => $selected_colors,
+                            'color_size_map_keys' => array_keys($color_size_map),
+                        )
+                    );
+                }
             }
         }
 
@@ -935,8 +1266,54 @@ function syncmaster_sync_monitored_products() {
             } else {
                 $created++;
             }
+            syncmaster_write_log(
+                'info',
+                sprintf(__('Synced SKU %s successfully.', 'syncmaster'), $sku),
+                1,
+                0,
+                array(
+                    'sku' => $sku,
+                    'product_id' => (int) $saved_id,
+                    'product_type' => $is_variable ? 'variable' : 'simple',
+                    'product_match_source' => $product_match_source,
+                    'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku,
+                    'product_id_by_desired_sku' => (int) $product_id_by_desired_sku,
+                    'selected_colors_count' => count($selected_colors),
+                    'resolved_colors_count' => count($color_term_ids),
+                    'resolved_sizes_count' => count($size_term_ids),
+                    'inventory_qty_total' => syncmaster_calculate_simple_inventory_qty($color_size_qty_map),
+                    'variations_target_count' => array_sum(array_map('count', $color_size_map)),
+                    'variation_stats' => $variation_stats,
+                    'existing_color_term_ids' => $existing_color_term_ids,
+                    'resolved_color_term_ids' => $color_term_ids,
+                    'selected_colors' => $selected_colors,
+                    'color_size_map_keys' => array_keys($color_size_map),
+                    'threaddesk_color_views_count' => count($color_postbox_view_map),
+                )
+            );
         } else {
             $fail++;
+            syncmaster_write_log(
+                'error',
+                sprintf(__('Sync failed for SKU %s: product save returned no ID.', 'syncmaster'), $sku),
+                0,
+                1,
+                array(
+                    'sku' => $sku,
+                    'desired_sku' => $desired_sku,
+                    'product_type' => $is_variable ? 'variable' : 'simple',
+                    'product_match_source' => $product_match_source,
+                    'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku,
+                    'product_id_by_desired_sku' => (int) $product_id_by_desired_sku,
+                    'reason' => 'save_failed',
+                    'inventory_qty_total' => syncmaster_calculate_simple_inventory_qty($color_size_qty_map),
+                    'existing_color_term_ids' => $existing_color_term_ids,
+                    'resolved_color_term_ids' => $color_term_ids,
+                    'selected_colors' => $selected_colors,
+                    'color_size_map_keys' => array_keys($color_size_map),
+                    'variation_stats' => $variation_stats,
+                )
+            );
         }
     }
 
@@ -976,7 +1353,7 @@ function syncmaster_write_log($level, $message, $success_count = 0, $fail_count 
 function syncmaster_get_logs() {
     global $wpdb;
     $table = $wpdb->prefix . SYNCMASTER_LOGS_TABLE;
-    return $wpdb->get_results("SELECT log_time, level, message, success_count, fail_count FROM {$table} ORDER BY log_time DESC LIMIT 50", ARRAY_A);
+    return $wpdb->get_results("SELECT log_time, level, message, success_count, fail_count, context_json FROM {$table} ORDER BY log_time DESC LIMIT 50", ARRAY_A);
 }
 
 function syncmaster_get_external_image_url($product) {
@@ -1319,12 +1696,27 @@ function syncmaster_get_style_colors($style_title) {
                         'colorCode' => $color_code,
                         'colorName' => syncmaster_extract_scalar($item['colorName'] ?? ($item['ColorName'] ?? '')),
                         'colorFrontImage' => syncmaster_extract_scalar($item['colorFrontImage'] ?? ($item['ColorFrontImage'] ?? '')),
+                        'colorBackImage' => syncmaster_extract_scalar($item['colorBackImage'] ?? ($item['ColorBackImage'] ?? '')),
+                        'colorDirectSideImage' => syncmaster_extract_scalar($item['colorDirectSideImage'] ?? ($item['ColorDirectSideImage'] ?? '')),
+                        'colorSideImage' => syncmaster_extract_scalar($item['colorSideImage'] ?? ($item['ColorSideImage'] ?? '')),
                         'colorSwatchImage' => syncmaster_extract_scalar($item['colorSwatchImage'] ?? ($item['ColorSwatchImage'] ?? '')),
                         'sizeNames' => array(),
                         'sizeSkus' => array(),
                         'sizePrices' => array(),
                         'sizeQtys' => array(),
                     );
+                }
+                if (empty($colors[$color_code]['colorFrontImage'])) {
+                    $colors[$color_code]['colorFrontImage'] = syncmaster_extract_scalar($item['colorFrontImage'] ?? ($item['ColorFrontImage'] ?? ''));
+                }
+                if (empty($colors[$color_code]['colorBackImage'])) {
+                    $colors[$color_code]['colorBackImage'] = syncmaster_extract_scalar($item['colorBackImage'] ?? ($item['ColorBackImage'] ?? ''));
+                }
+                if (empty($colors[$color_code]['colorDirectSideImage'])) {
+                    $colors[$color_code]['colorDirectSideImage'] = syncmaster_extract_scalar($item['colorDirectSideImage'] ?? ($item['ColorDirectSideImage'] ?? ''));
+                }
+                if (empty($colors[$color_code]['colorSideImage'])) {
+                    $colors[$color_code]['colorSideImage'] = syncmaster_extract_scalar($item['colorSideImage'] ?? ($item['ColorSideImage'] ?? ''));
                 }
                 $size_name = sanitize_text_field(syncmaster_extract_scalar($item['sizeName'] ?? ($item['SizeName'] ?? '')));
                 if ($size_name !== '') {
