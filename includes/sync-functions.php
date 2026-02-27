@@ -799,27 +799,53 @@ function syncmaster_round_up_price($price, $increment = 0.25) {
 }
 
 function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $color_size_sku_map, $color_size_qty_map, $color_size_price_map, $color_size_image_map, $color_taxonomy, $size_taxonomy, $margin_percent) {
+    $stats = array(
+        'created' => 0,
+        'deleted' => 0,
+        'skipped' => 0,
+        'errors' => array(),
+        'attempted' => 0,
+    );
+
     if (empty($color_size_map)) {
-        return;
+        $stats['errors'][] = 'empty_color_size_map';
+        return $stats;
     }
 
     $product = wc_get_product($product_id);
-    if (!$product || !$product->is_type('variable')) {
-        return;
+    if (!$product) {
+        $stats['errors'][] = 'missing_parent_product';
+        return $stats;
+    }
+
+    if (!$product->is_type('variable')) {
+        syncmaster_set_product_type_term($product_id, true);
+        clean_post_cache($product_id);
+        $product = wc_get_product($product_id);
+        if (!$product || !$product->is_type('variable')) {
+            $stats['errors'][] = 'parent_not_variable';
+            return $stats;
+        }
     }
 
     foreach ($product->get_children() as $child_id) {
         wp_delete_post($child_id, true);
+        $stats['deleted']++;
     }
 
     foreach ($color_size_map as $color_name => $size_names) {
         $color_slug = syncmaster_get_attribute_term_slug($color_name, $color_taxonomy);
         if ($color_slug === '') {
+            $stats['skipped']++;
+            $stats['errors'][] = 'missing_color_slug:' . $color_name;
             continue;
         }
         foreach ($size_names as $size_name) {
+            $stats['attempted']++;
             $size_slug = syncmaster_get_attribute_term_slug($size_name, $size_taxonomy);
             if ($size_slug === '') {
+                $stats['skipped']++;
+                $stats['errors'][] = 'missing_size_slug:' . $size_name;
                 continue;
             }
             $variation = new WC_Product_Variation();
@@ -838,7 +864,8 @@ function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $co
                     $size_slug,
                 ));
                 if (!empty($variation_sku_parts)) {
-                    $variation->set_sku(implode('-', $variation_sku_parts));
+                    $variation_sku = implode('-', $variation_sku_parts);
+                    $variation->set_sku($variation_sku);
                 }
             }
             if ($variation_sku !== '' && isset($color_size_image_map[$variation_sku])) {
@@ -860,9 +887,18 @@ function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $co
                 $variation->set_price($variation_price);
             }
             $variation->set_status('publish');
-            $variation->save();
+
+            $saved_variation_id = $variation->save();
+            if ($saved_variation_id) {
+                $stats['created']++;
+            } else {
+                $stats['skipped']++;
+                $stats['errors'][] = 'variation_save_failed:' . $color_name . ':' . $size_name;
+            }
         }
     }
+
+    return $stats;
 }
 
 function syncmaster_set_product_category($product_id, $category_name) {
@@ -1058,6 +1094,14 @@ function syncmaster_sync_monitored_products() {
         syncmaster_apply_size_attributes($product, $size_term_ids, $size_taxonomy, $is_variable);
         $saved_id = $product->save();
 
+        $variation_stats = array(
+            'created' => 0,
+            'deleted' => 0,
+            'skipped' => 0,
+            'errors' => array(),
+            'attempted' => 0,
+        );
+
         if ($saved_id) {
             syncmaster_assign_color_terms($saved_id, $color_term_ids, $color_taxonomy);
             syncmaster_assign_size_terms($saved_id, $size_term_ids, $size_taxonomy);
@@ -1068,7 +1112,7 @@ function syncmaster_sync_monitored_products() {
                 syncmaster_set_featured_image($saved_id, $mapped['image']);
             }
             if ($is_variable) {
-                syncmaster_sync_variations(
+                $variation_stats = syncmaster_sync_variations(
                     $saved_id,
                     $desired_sku,
                     $color_size_map,
@@ -1080,6 +1124,21 @@ function syncmaster_sync_monitored_products() {
                     $size_taxonomy,
                     $margin_percent
                 );
+                if (!empty($variation_stats['errors'])) {
+                    syncmaster_write_log(
+                        'error',
+                        sprintf(__('Variation sync warnings for SKU %s.', 'syncmaster'), $sku),
+                        (int) ($variation_stats['created'] ?? 0),
+                        (int) ($variation_stats['skipped'] ?? 0),
+                        array(
+                            'sku' => $sku,
+                            'product_id' => (int) $saved_id,
+                            'variation_stats' => $variation_stats,
+                            'selected_colors' => $selected_colors,
+                            'color_size_map_keys' => array_keys($color_size_map),
+                        )
+                    );
+                }
             }
         }
 
@@ -1102,6 +1161,11 @@ function syncmaster_sync_monitored_products() {
                     'resolved_colors_count' => count($color_term_ids),
                     'resolved_sizes_count' => count($size_term_ids),
                     'variations_target_count' => array_sum(array_map('count', $color_size_map)),
+                    'variation_stats' => $variation_stats,
+                    'existing_color_term_ids' => $existing_color_term_ids,
+                    'resolved_color_term_ids' => $color_term_ids,
+                    'selected_colors' => $selected_colors,
+                    'color_size_map_keys' => array_keys($color_size_map),
                     'threaddesk_color_views_count' => count($color_postbox_view_map),
                 )
             );
@@ -1117,6 +1181,11 @@ function syncmaster_sync_monitored_products() {
                     'desired_sku' => $desired_sku,
                     'product_type' => $is_variable ? 'variable' : 'simple',
                     'reason' => 'save_failed',
+                    'existing_color_term_ids' => $existing_color_term_ids,
+                    'resolved_color_term_ids' => $color_term_ids,
+                    'selected_colors' => $selected_colors,
+                    'color_size_map_keys' => array_keys($color_size_map),
+                    'variation_stats' => $variation_stats,
                 )
             );
         }
