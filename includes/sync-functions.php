@@ -636,6 +636,70 @@ function syncmaster_collect_color_size_image_map($colors, $selected_colors = arr
     return $map;
 }
 
+function syncmaster_collect_color_front_image_map($colors, $selected_colors = array(), $color_taxonomy = null) {
+    $map = array();
+    $taxonomy = $color_taxonomy ?: syncmaster_get_color_taxonomy();
+
+    foreach ($colors as $color) {
+        $color_name = sanitize_text_field($color['colorName'] ?? '');
+        if ($color_name === '') {
+            continue;
+        }
+        if (!empty($selected_colors) && !in_array($color_name, $selected_colors, true)) {
+            continue;
+        }
+
+        $color_slug = syncmaster_get_attribute_term_slug($color_name, $taxonomy);
+        if ($color_slug === '') {
+            continue;
+        }
+
+        $image_url = syncmaster_normalize_ss_image_url($color['colorFrontImage'] ?? '');
+        if ($image_url === '') {
+            continue;
+        }
+
+        $map[$color_slug] = $image_url;
+    }
+
+    return $map;
+}
+
+function syncmaster_update_threaddesk_product_postbox($product_id, $color_front_image_map) {
+    if (!$product_id || empty($color_front_image_map) || !is_array($color_front_image_map)) {
+        return;
+    }
+
+    $existing = get_post_meta($product_id, 'tta_threaddesk_product_postbox', true);
+    $postbox = is_array($existing) ? $existing : array();
+    $postbox['colors'] = isset($postbox['colors']) && is_array($postbox['colors'])
+        ? $postbox['colors']
+        : array();
+
+    foreach ($color_front_image_map as $color_slug => $image_url) {
+        $color_slug = sanitize_title($color_slug);
+        $image_url = esc_url_raw($image_url);
+        if ($color_slug === '' || $image_url === '') {
+            continue;
+        }
+
+        $current = $postbox['colors'][$color_slug] ?? array();
+        if (!is_array($current)) {
+            $current = array();
+        }
+
+        $current['front_image'] = $image_url;
+        $current['front_fallback_url'] = $image_url;
+        if (empty($current['side_label']) || !in_array($current['side_label'], array('left', 'right'), true)) {
+            $current['side_label'] = 'left';
+        }
+
+        $postbox['colors'][$color_slug] = $current;
+    }
+
+    update_post_meta($product_id, 'tta_threaddesk_product_postbox', $postbox);
+}
+
 function syncmaster_collect_color_swatch_map($colors) {
     $map = array();
     foreach ($colors as $color) {
@@ -875,6 +939,7 @@ function syncmaster_sync_monitored_products() {
         $is_variable = count($color_term_ids) > 1 || count($size_term_ids) > 1;
         $margin_percent = syncmaster_get_margin_percent_for_sku($sku, 50);
         $color_size_image_map = syncmaster_collect_color_size_image_map($colors, $selected_colors);
+        $color_front_image_map = syncmaster_collect_color_front_image_map($colors, $selected_colors, $color_taxonomy);
         if ($product_id) {
             $product = $is_variable ? new WC_Product_Variable($product_id) : new WC_Product_Simple($product_id);
         } else {
@@ -910,6 +975,7 @@ function syncmaster_sync_monitored_products() {
             syncmaster_assign_size_terms($saved_id, $size_term_ids, $size_taxonomy);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
             syncmaster_set_product_category($saved_id, $mapped['category']);
+            syncmaster_update_threaddesk_product_postbox($saved_id, $color_front_image_map);
             if ($mapped['image'] !== '') {
                 syncmaster_set_featured_image($saved_id, $mapped['image']);
             }
