@@ -789,6 +789,46 @@ function syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, 
     }
 }
 
+function syncmaster_calculate_simple_inventory_qty($color_size_qty_map) {
+    $total_qty = 0;
+    foreach ((array) $color_size_qty_map as $size_qtys) {
+        if (!is_array($size_qtys)) {
+            continue;
+        }
+        foreach ($size_qtys as $qty) {
+            $total_qty += (int) $qty;
+        }
+    }
+
+    return max(0, (int) $total_qty);
+}
+
+function syncmaster_calculate_simple_sell_price($color_size_price_map, $margin_percent) {
+    $customer_price = 0;
+    foreach ((array) $color_size_price_map as $size_prices) {
+        if (!is_array($size_prices)) {
+            continue;
+        }
+        foreach ($size_prices as $price) {
+            $price = (float) $price;
+            if ($price > 0) {
+                $customer_price = $price;
+                break 2;
+            }
+        }
+    }
+
+    if ($customer_price <= 0) {
+        return '';
+    }
+
+    $margin_multiplier = max(((float) $margin_percent) / 100, 0.01);
+    $sell_price = $customer_price / $margin_multiplier;
+    $sell_price = syncmaster_round_up_price($sell_price, 0.25);
+
+    return function_exists('wc_format_decimal') ? wc_format_decimal($sell_price) : $sell_price;
+}
+
 function syncmaster_round_up_price($price, $increment = 0.25) {
     $increment = (float) $increment;
     if ($increment <= 0) {
@@ -1119,6 +1159,18 @@ function syncmaster_sync_monitored_products() {
         $product->set_status('publish');
         syncmaster_apply_color_attributes($product, $color_term_ids, $color_taxonomy, $is_variable);
         syncmaster_apply_size_attributes($product, $size_term_ids, $size_taxonomy, $is_variable);
+        if (!$is_variable) {
+            $simple_qty = syncmaster_calculate_simple_inventory_qty($color_size_qty_map);
+            $product->set_manage_stock(true);
+            $product->set_stock_quantity($simple_qty);
+            $product->set_stock_status($simple_qty > 0 ? 'instock' : 'outofstock');
+
+            $simple_price = syncmaster_calculate_simple_sell_price($color_size_price_map, $margin_percent);
+            if ($simple_price !== '') {
+                $product->set_regular_price($simple_price);
+                $product->set_price($simple_price);
+            }
+        }
         $saved_id = $product->save();
 
         $variation_stats = array(
@@ -1190,6 +1242,7 @@ function syncmaster_sync_monitored_products() {
                     'selected_colors_count' => count($selected_colors),
                     'resolved_colors_count' => count($color_term_ids),
                     'resolved_sizes_count' => count($size_term_ids),
+                    'inventory_qty_total' => syncmaster_calculate_simple_inventory_qty($color_size_qty_map),
                     'variations_target_count' => array_sum(array_map('count', $color_size_map)),
                     'variation_stats' => $variation_stats,
                     'existing_color_term_ids' => $existing_color_term_ids,
@@ -1214,6 +1267,7 @@ function syncmaster_sync_monitored_products() {
                     'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku,
                     'product_id_by_desired_sku' => (int) $product_id_by_desired_sku,
                     'reason' => 'save_failed',
+                    'inventory_qty_total' => syncmaster_calculate_simple_inventory_qty($color_size_qty_map),
                     'existing_color_term_ids' => $existing_color_term_ids,
                     'resolved_color_term_ids' => $color_term_ids,
                     'selected_colors' => $selected_colors,
