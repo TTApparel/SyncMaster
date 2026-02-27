@@ -636,7 +636,7 @@ function syncmaster_collect_color_size_image_map($colors, $selected_colors = arr
     return $map;
 }
 
-function syncmaster_collect_color_front_image_map($colors, $selected_colors = array(), $color_taxonomy = null) {
+function syncmaster_collect_color_postbox_view_map($colors, $selected_colors = array(), $color_taxonomy = null) {
     $map = array();
     $taxonomy = $color_taxonomy ?: syncmaster_get_color_taxonomy();
 
@@ -654,19 +654,29 @@ function syncmaster_collect_color_front_image_map($colors, $selected_colors = ar
             continue;
         }
 
-        $image_url = syncmaster_normalize_ss_image_url($color['colorFrontImage'] ?? '');
-        if ($image_url === '') {
+        $front_image = syncmaster_normalize_ss_image_url($color['colorFrontImage'] ?? '');
+        $back_image = syncmaster_normalize_ss_image_url($color['colorBackImage'] ?? '');
+        $side_image = syncmaster_normalize_ss_image_url($color['colorDirectSideImage'] ?? '');
+        if ($side_image === '') {
+            $side_image = $back_image;
+        }
+
+        if ($front_image === '' && $back_image === '' && $side_image === '') {
             continue;
         }
 
-        $map[$color_slug] = $image_url;
+        $map[$color_slug] = array(
+            'front' => $front_image,
+            'back' => $back_image,
+            'side' => $side_image,
+        );
     }
 
     return $map;
 }
 
-function syncmaster_update_threaddesk_product_postbox($product_id, $color_front_image_map) {
-    if (!$product_id || empty($color_front_image_map) || !is_array($color_front_image_map)) {
+function syncmaster_update_threaddesk_product_postbox($product_id, $color_postbox_view_map) {
+    if (!$product_id || empty($color_postbox_view_map) || !is_array($color_postbox_view_map)) {
         return;
     }
 
@@ -676,10 +686,17 @@ function syncmaster_update_threaddesk_product_postbox($product_id, $color_front_
         ? $postbox['colors']
         : array();
 
-    foreach ($color_front_image_map as $color_slug => $image_url) {
+    foreach ($color_postbox_view_map as $color_slug => $views) {
         $color_slug = sanitize_title($color_slug);
-        $image_url = esc_url_raw($image_url);
-        if ($color_slug === '' || $image_url === '') {
+        if ($color_slug === '' || !is_array($views)) {
+            continue;
+        }
+
+        $front_image = esc_url_raw($views['front'] ?? '');
+        $back_image = esc_url_raw($views['back'] ?? '');
+        $side_image = esc_url_raw($views['side'] ?? '');
+
+        if ($front_image === '' && $back_image === '' && $side_image === '') {
             continue;
         }
 
@@ -688,8 +705,18 @@ function syncmaster_update_threaddesk_product_postbox($product_id, $color_front_
             $current = array();
         }
 
-        $current['front_image'] = $image_url;
-        $current['front_fallback_url'] = $image_url;
+        if ($front_image !== '') {
+            $current['front_image'] = $front_image;
+            $current['front_fallback_url'] = $front_image;
+        }
+        if ($back_image !== '') {
+            $current['back_image'] = $back_image;
+            $current['back_fallback_url'] = $back_image;
+        }
+        if ($side_image !== '') {
+            $current['side_image'] = $side_image;
+            $current['side_fallback_url'] = $side_image;
+        }
         if (empty($current['side_label']) || !in_array($current['side_label'], array('left', 'right'), true)) {
             $current['side_label'] = 'left';
         }
@@ -939,7 +966,7 @@ function syncmaster_sync_monitored_products() {
         $is_variable = count($color_term_ids) > 1 || count($size_term_ids) > 1;
         $margin_percent = syncmaster_get_margin_percent_for_sku($sku, 50);
         $color_size_image_map = syncmaster_collect_color_size_image_map($colors, $selected_colors);
-        $color_front_image_map = syncmaster_collect_color_front_image_map($colors, $selected_colors, $color_taxonomy);
+        $color_postbox_view_map = syncmaster_collect_color_postbox_view_map($colors, $selected_colors, $color_taxonomy);
         if ($product_id) {
             $product = $is_variable ? new WC_Product_Variable($product_id) : new WC_Product_Simple($product_id);
         } else {
@@ -975,7 +1002,7 @@ function syncmaster_sync_monitored_products() {
             syncmaster_assign_size_terms($saved_id, $size_term_ids, $size_taxonomy);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
             syncmaster_set_product_category($saved_id, $mapped['category']);
-            syncmaster_update_threaddesk_product_postbox($saved_id, $color_front_image_map);
+            syncmaster_update_threaddesk_product_postbox($saved_id, $color_postbox_view_map);
             if ($mapped['image'] !== '') {
                 syncmaster_set_featured_image($saved_id, $mapped['image']);
             }
@@ -1385,12 +1412,23 @@ function syncmaster_get_style_colors($style_title) {
                         'colorCode' => $color_code,
                         'colorName' => syncmaster_extract_scalar($item['colorName'] ?? ($item['ColorName'] ?? '')),
                         'colorFrontImage' => syncmaster_extract_scalar($item['colorFrontImage'] ?? ($item['ColorFrontImage'] ?? '')),
+                        'colorBackImage' => syncmaster_extract_scalar($item['colorBackImage'] ?? ($item['ColorBackImage'] ?? '')),
+                        'colorDirectSideImage' => syncmaster_extract_scalar($item['colorDirectSideImage'] ?? ($item['ColorDirectSideImage'] ?? '')),
                         'colorSwatchImage' => syncmaster_extract_scalar($item['colorSwatchImage'] ?? ($item['ColorSwatchImage'] ?? '')),
                         'sizeNames' => array(),
                         'sizeSkus' => array(),
                         'sizePrices' => array(),
                         'sizeQtys' => array(),
                     );
+                }
+                if (empty($colors[$color_code]['colorFrontImage'])) {
+                    $colors[$color_code]['colorFrontImage'] = syncmaster_extract_scalar($item['colorFrontImage'] ?? ($item['ColorFrontImage'] ?? ''));
+                }
+                if (empty($colors[$color_code]['colorBackImage'])) {
+                    $colors[$color_code]['colorBackImage'] = syncmaster_extract_scalar($item['colorBackImage'] ?? ($item['ColorBackImage'] ?? ''));
+                }
+                if (empty($colors[$color_code]['colorDirectSideImage'])) {
+                    $colors[$color_code]['colorDirectSideImage'] = syncmaster_extract_scalar($item['colorDirectSideImage'] ?? ($item['ColorDirectSideImage'] ?? ''));
                 }
                 $size_name = sanitize_text_field(syncmaster_extract_scalar($item['sizeName'] ?? ($item['SizeName'] ?? '')));
                 if ($size_name !== '') {
