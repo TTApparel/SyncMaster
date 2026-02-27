@@ -656,7 +656,11 @@ function syncmaster_collect_color_postbox_view_map($colors, $selected_colors = a
 
         $front_image = syncmaster_normalize_ss_image_url($color['colorFrontImage'] ?? '');
         $back_image = syncmaster_normalize_ss_image_url($color['colorBackImage'] ?? '');
-        $side_image = syncmaster_normalize_ss_image_url($color['colorDirectSideImage'] ?? '');
+        $direct_side_image = syncmaster_normalize_ss_image_url($color['colorDirectSideImage'] ?? '');
+        $side_image = syncmaster_normalize_ss_image_url($color['colorSideImage'] ?? '');
+        if ($direct_side_image !== '') {
+            $side_image = $direct_side_image;
+        }
         if ($side_image === '') {
             $side_image = $back_image;
         }
@@ -1414,6 +1418,7 @@ function syncmaster_get_style_colors($style_title) {
                         'colorFrontImage' => syncmaster_extract_scalar($item['colorFrontImage'] ?? ($item['ColorFrontImage'] ?? '')),
                         'colorBackImage' => syncmaster_extract_scalar($item['colorBackImage'] ?? ($item['ColorBackImage'] ?? '')),
                         'colorDirectSideImage' => syncmaster_extract_scalar($item['colorDirectSideImage'] ?? ($item['ColorDirectSideImage'] ?? '')),
+                        'colorSideImage' => syncmaster_extract_scalar($item['colorSideImage'] ?? ($item['ColorSideImage'] ?? '')),
                         'colorSwatchImage' => syncmaster_extract_scalar($item['colorSwatchImage'] ?? ($item['ColorSwatchImage'] ?? '')),
                         'sizeNames' => array(),
                         'sizeSkus' => array(),
@@ -1429,6 +1434,9 @@ function syncmaster_get_style_colors($style_title) {
                 }
                 if (empty($colors[$color_code]['colorDirectSideImage'])) {
                     $colors[$color_code]['colorDirectSideImage'] = syncmaster_extract_scalar($item['colorDirectSideImage'] ?? ($item['ColorDirectSideImage'] ?? ''));
+                }
+                if (empty($colors[$color_code]['colorSideImage'])) {
+                    $colors[$color_code]['colorSideImage'] = syncmaster_extract_scalar($item['colorSideImage'] ?? ($item['ColorSideImage'] ?? ''));
                 }
                 $size_name = sanitize_text_field(syncmaster_extract_scalar($item['sizeName'] ?? ($item['SizeName'] ?? '')));
                 if ($size_name !== '') {
