@@ -313,12 +313,33 @@ function syncmaster_render_logs() {
         <?php else : ?>
             <ul class="syncmaster-logs">
                 <?php foreach ($logs as $log) : ?>
+                    <?php
+                    $context = array();
+                    $raw_context_json = '';
+                    if (!empty($log['context_json'])) {
+                        $raw_context_json = (string) $log['context_json'];
+                        $decoded = json_decode($raw_context_json, true);
+                        if (is_array($decoded)) {
+                            $context = $decoded;
+                        }
+                    }
+                    ?>
                     <li class="syncmaster-log syncmaster-log-<?php echo esc_attr($log['level']); ?>">
                         <div>
                             <strong><?php echo esc_html($log['message']); ?></strong>
                             <div class="syncmaster-muted">
                                 <?php echo esc_html($log['log_time']); ?> · <?php echo esc_html(strtoupper($log['level'])); ?>
                             </div>
+                            <?php if (!empty($context) || $raw_context_json !== '') : ?>
+                                <details class="syncmaster-log-context">
+                                    <summary><?php echo esc_html__('Details', 'syncmaster'); ?></summary>
+                                    <?php if (!empty($context)) : ?>
+                                        <pre><?php echo esc_html(wp_json_encode($context, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></pre>
+                                    <?php else : ?>
+                                        <pre><?php echo esc_html($raw_context_json); ?></pre>
+                                    <?php endif; ?>
+                                </details>
+                            <?php endif; ?>
                         </div>
                         <div class="syncmaster-log-counts">
                             <span><?php echo esc_html(sprintf(__('Success: %d', 'syncmaster'), $log['success_count'])); ?></span>
