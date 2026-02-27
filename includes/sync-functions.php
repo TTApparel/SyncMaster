@@ -149,7 +149,7 @@ function syncmaster_handle_sync_now() {
     check_admin_referer('syncmaster_sync_now');
 
     syncmaster_write_log('info', __('Manual sync triggered.', 'syncmaster'), 0, 0, array('source' => 'manual'));
-    syncmaster_run_sync_placeholder();
+    syncmaster_run_sync_placeholder('manual');
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&synced=1'));
     exit;
@@ -157,23 +157,60 @@ function syncmaster_handle_sync_now() {
 
 function syncmaster_run_scheduled_sync() {
     syncmaster_write_log('info', __('Scheduled sync triggered.', 'syncmaster'), 0, 0, array('source' => 'cron'));
-    syncmaster_run_sync_placeholder();
+    syncmaster_run_sync_placeholder('cron');
 }
 
-function syncmaster_run_sync_placeholder() {
+function syncmaster_run_sync_placeholder($source = 'unknown') {
+    $started_at = time();
     $results = syncmaster_sync_monitored_products();
+    update_option('syncmaster_last_sync_run_ts', $started_at);
+    update_option('syncmaster_last_sync_status', sanitize_text_field($results['status']));
+
     syncmaster_write_log(
         $results['status'],
         $results['message'],
         $results['success'],
         $results['fail'],
         array(
+            'source' => sanitize_text_field($source),
+            'started_at' => gmdate('c', $started_at),
             'duration' => rand(10, 40),
             'monitored' => $results['monitored'],
             'created' => $results['created'],
             'updated' => $results['updated'],
         )
     );
+}
+
+function syncmaster_maybe_run_interval_sync() {
+    if (wp_doing_cron() || wp_doing_ajax()) {
+        return;
+    }
+
+    $lock_key = 'syncmaster_interval_sync_lock';
+    if (get_transient($lock_key)) {
+        return;
+    }
+
+    $interval_minutes = (int) get_option('sync_interval_minutes', 60);
+    if ($interval_minutes < 5) {
+        $interval_minutes = 5;
+    }
+
+    $interval_seconds = $interval_minutes * 60;
+    $last_run = (int) get_option('syncmaster_last_sync_run_ts', 0);
+    if ($last_run > 0 && (time() - $last_run) < $interval_seconds) {
+        return;
+    }
+
+    set_transient($lock_key, 1, 5 * MINUTE_IN_SECONDS);
+    syncmaster_write_log('info', __('Interval sync fallback triggered.', 'syncmaster'), 0, 0, array(
+        'source' => 'interval_fallback',
+        'last_run' => $last_run,
+        'interval_seconds' => $interval_seconds,
+    ));
+    syncmaster_run_sync_placeholder('interval_fallback');
+    delete_transient($lock_key);
 }
 
 function syncmaster_fetch_ss_product($sku) {

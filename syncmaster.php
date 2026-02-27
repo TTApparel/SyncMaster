@@ -60,6 +60,7 @@ add_action('admin_post_syncmaster_save_margin', 'syncmaster_handle_save_margin')
 
 add_action('syncmaster_cron_sync', 'syncmaster_run_scheduled_sync');
 add_action('init', 'syncmaster_ensure_cron_configuration');
+add_action('init', 'syncmaster_maybe_run_interval_sync', 20);
 add_action('wp_enqueue_scripts', 'syncmaster_enqueue_frontend_assets');
 
 add_filter('cron_schedules', 'syncmaster_register_cron_schedule');
