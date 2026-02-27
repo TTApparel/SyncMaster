@@ -1026,7 +1026,35 @@ function syncmaster_sync_monitored_products() {
             continue;
         }
         $mapped = syncmaster_map_product_data($api_item);
-        $product_id = wc_get_product_id_by_sku($sku);
+        $desired_sku = $mapped['sku'] !== '' ? $mapped['sku'] : $sku;
+        $product_id_by_monitored_sku = wc_get_product_id_by_sku($sku);
+        $product_id_by_desired_sku = $desired_sku !== '' ? wc_get_product_id_by_sku($desired_sku) : 0;
+        $product_id = $product_id_by_monitored_sku;
+        $product_match_source = $product_id ? 'monitored_sku' : 'new_product';
+
+        if (!$product_id && $product_id_by_desired_sku) {
+            $product_id = $product_id_by_desired_sku;
+            $product_match_source = 'desired_sku';
+        }
+
+        if ($product_id_by_monitored_sku && $product_id_by_desired_sku && $product_id_by_monitored_sku !== $product_id_by_desired_sku) {
+            $fail++;
+            syncmaster_write_log(
+                'error',
+                sprintf(__('Sync failed for SKU %s: monitored SKU and mapped SKU resolve to different products.', 'syncmaster'), $sku),
+                0,
+                1,
+                array(
+                    'sku' => $sku,
+                    'desired_sku' => $desired_sku,
+                    'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku,
+                    'product_id_by_desired_sku' => (int) $product_id_by_desired_sku,
+                    'reason' => 'sku_resolution_conflict',
+                )
+            );
+            continue;
+        }
+
         $style_title = trim(($api_item['brandName'] ?? '') . ' ' . ($api_item['styleName'] ?? ''));
         $colors = $style_title !== '' ? syncmaster_get_style_colors($style_title) : array();
         $selected_colors = $color_selections[$sku] ?? array();
@@ -1063,13 +1091,12 @@ function syncmaster_sync_monitored_products() {
                 sprintf(__('Sync failed for SKU %s: could not initialize WooCommerce product object.', 'syncmaster'), $sku),
                 0,
                 1,
-                array('sku' => $sku, 'reason' => 'product_init_failed', 'is_variable' => $is_variable)
+                array('sku' => $sku, 'reason' => 'product_init_failed', 'is_variable' => $is_variable, 'desired_sku' => $desired_sku, 'product_match_source' => $product_match_source, 'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku, 'product_id_by_desired_sku' => (int) $product_id_by_desired_sku)
             );
             continue;
         }
 
         $product->set_name($mapped['name'] !== '' ? $mapped['name'] : sprintf(__('Synced SKU %s', 'syncmaster'), $sku));
-        $desired_sku = $mapped['sku'] !== '' ? $mapped['sku'] : $sku;
         $existing_id = wc_get_product_id_by_sku($desired_sku);
         if ($existing_id && $existing_id !== $product_id) {
             $fail++;
@@ -1078,7 +1105,7 @@ function syncmaster_sync_monitored_products() {
                 sprintf(__('Sync failed for SKU %s: mapped SKU %s is already used by product ID %d.', 'syncmaster'), $sku, $desired_sku, (int) $existing_id),
                 0,
                 1,
-                array('sku' => $sku, 'desired_sku' => $desired_sku, 'conflicting_product_id' => (int) $existing_id, 'reason' => 'duplicate_sku')
+                array('sku' => $sku, 'desired_sku' => $desired_sku, 'conflicting_product_id' => (int) $existing_id, 'product_id' => (int) $product_id, 'product_match_source' => $product_match_source, 'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku, 'product_id_by_desired_sku' => (int) $product_id_by_desired_sku, 'reason' => 'duplicate_sku')
             );
             continue;
         }
@@ -1157,6 +1184,9 @@ function syncmaster_sync_monitored_products() {
                     'sku' => $sku,
                     'product_id' => (int) $saved_id,
                     'product_type' => $is_variable ? 'variable' : 'simple',
+                    'product_match_source' => $product_match_source,
+                    'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku,
+                    'product_id_by_desired_sku' => (int) $product_id_by_desired_sku,
                     'selected_colors_count' => count($selected_colors),
                     'resolved_colors_count' => count($color_term_ids),
                     'resolved_sizes_count' => count($size_term_ids),
@@ -1180,6 +1210,9 @@ function syncmaster_sync_monitored_products() {
                     'sku' => $sku,
                     'desired_sku' => $desired_sku,
                     'product_type' => $is_variable ? 'variable' : 'simple',
+                    'product_match_source' => $product_match_source,
+                    'product_id_by_monitored_sku' => (int) $product_id_by_monitored_sku,
+                    'product_id_by_desired_sku' => (int) $product_id_by_desired_sku,
                     'reason' => 'save_failed',
                     'existing_color_term_ids' => $existing_color_term_ids,
                     'resolved_color_term_ids' => $color_term_ids,
