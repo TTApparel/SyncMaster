@@ -1185,7 +1185,9 @@ function syncmaster_sync_monitored_products() {
             syncmaster_assign_color_terms($saved_id, $color_term_ids, $color_taxonomy);
             syncmaster_assign_size_terms($saved_id, $size_term_ids, $size_taxonomy);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
-            syncmaster_set_product_category($saved_id, $mapped['category']);
+            if (!$product_id) {
+                syncmaster_set_product_category($saved_id, $mapped['category']);
+            }
             syncmaster_update_threaddesk_product_postbox($saved_id, $color_postbox_view_map);
             if ($mapped['image'] !== '') {
                 syncmaster_set_featured_image($saved_id, $mapped['image']);
