@@ -693,14 +693,7 @@ function syncmaster_collect_color_postbox_view_map($colors, $selected_colors = a
 
         $front_image = syncmaster_normalize_ss_image_url($color['colorFrontImage'] ?? '');
         $back_image = syncmaster_normalize_ss_image_url($color['colorBackImage'] ?? '');
-        $direct_side_image = syncmaster_normalize_ss_image_url($color['colorDirectSideImage'] ?? '');
-        $side_image = syncmaster_normalize_ss_image_url($color['colorSideImage'] ?? '');
-        if ($direct_side_image !== '') {
-            $side_image = $direct_side_image;
-        }
-        if ($side_image === '') {
-            $side_image = $back_image;
-        }
+        $side_image = syncmaster_normalize_ss_image_url($color['colorDirectSideImage'] ?? '');
 
         if ($front_image === '' && $back_image === '' && $side_image === '') {
             continue;
