@@ -122,6 +122,16 @@
     margin-top: 12px;
 }
 
+.syncmaster-category-bulk-toggle {
+    margin: 0 0 12px;
+}
+
+.syncmaster-category-actions {
+    display: flex;
+    gap: 8px;
+    margin: 0 0 12px;
+}
+
 .syncmaster-category-table th,
 .syncmaster-category-table td {
     vertical-align: middle;

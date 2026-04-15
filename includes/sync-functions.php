@@ -125,6 +125,10 @@ function syncmaster_get_category_sync_rules() {
     return $rules;
 }
 
+function syncmaster_should_sync_all_categories() {
+    return (bool) get_option('syncmaster_sync_all_categories', false);
+}
+
 function syncmaster_fetch_ss_categories() {
     $cache_key = 'syncmaster_ss_categories_v1';
     $cached = get_transient($cache_key);
@@ -257,6 +261,7 @@ function syncmaster_handle_save_categories() {
     }
 
     update_option('syncmaster_category_sync_rules', $rules);
+    update_option('syncmaster_sync_all_categories', !empty($_POST['syncmaster_sync_all_categories']) ? 1 : 0);
     delete_transient('syncmaster_selected_category_style_ids');
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&products_tab=categories&categories_saved=1'));
@@ -1215,15 +1220,18 @@ function syncmaster_get_selected_category_style_ids() {
         return $cached;
     }
 
+    $sync_all_categories = syncmaster_should_sync_all_categories();
     $rules = syncmaster_get_category_sync_rules();
     $enabled_categories = array();
-    foreach ($rules as $source_name => $rule) {
-        if (!empty($rule['enabled'])) {
-            $enabled_categories[] = $source_name;
+    if (!$sync_all_categories) {
+        foreach ($rules as $source_name => $rule) {
+            if (!empty($rule['enabled'])) {
+                $enabled_categories[] = $source_name;
+            }
         }
     }
 
-    if (empty($enabled_categories)) {
+    if (!$sync_all_categories && empty($enabled_categories)) {
         return array();
     }
 
@@ -1248,7 +1256,10 @@ function syncmaster_get_selected_category_style_ids() {
         }
         $base_category = sanitize_text_field($style['baseCategory'] ?? '');
         $style_id = sanitize_text_field($style['styleID'] ?? '');
-        if ($style_id === '' || $base_category === '' || !isset($enabled_lookup[$base_category])) {
+        if ($style_id === '' || $base_category === '') {
+            continue;
+        }
+        if (!$sync_all_categories && !isset($enabled_lookup[$base_category])) {
             continue;
         }
         $style_ids[] = $style_id;

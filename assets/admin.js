@@ -15,4 +15,12 @@
         panel.classList.toggle('is-open');
         $(this).text(isOpen ? 'View Colors' : 'Hide Colors');
     });
+
+    $(document).on('click', '.syncmaster-select-all-categories', function () {
+        $('.syncmaster-category-table input[type="checkbox"][name*="[enabled]"]').prop('checked', true);
+    });
+
+    $(document).on('click', '.syncmaster-clear-all-categories', function () {
+        $('.syncmaster-category-table input[type="checkbox"][name*="[enabled]"]').prop('checked', false);
+    });
 })(jQuery);
