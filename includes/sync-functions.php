@@ -324,6 +324,77 @@ function syncmaster_get_size_taxonomy() {
     return $taxonomy;
 }
 
+function syncmaster_build_color_term_slug($color) {
+    $compact_slug_part = static function ($value) {
+        $value = sanitize_text_field((string) $value);
+        $value = preg_replace('/\s+/', '', $value);
+        return sanitize_title($value);
+    };
+
+    if (is_string($color)) {
+        return $compact_slug_part($color);
+    }
+
+    if (!is_array($color)) {
+        return '';
+    }
+
+    $family = sanitize_text_field(syncmaster_extract_scalar($color['colorFamily'] ?? ($color['ColorFamily'] ?? '')));
+    $group = sanitize_text_field(syncmaster_extract_scalar($color['colorGroupName'] ?? ($color['ColorGroupName'] ?? '')));
+    $name = sanitize_text_field(syncmaster_extract_scalar($color['colorName'] ?? ($color['ColorName'] ?? '')));
+    if ($name === '') {
+        return '';
+    }
+
+    $parts = array_filter(array($family, $group, $name), 'strlen');
+    if (empty($parts)) {
+        return '';
+    }
+
+    $slug_parts = array();
+    foreach ($parts as $part) {
+        $slug = $compact_slug_part($part);
+        if ($slug !== '') {
+            $slug_parts[] = $slug;
+        }
+    }
+
+    return implode('-', $slug_parts);
+}
+
+function syncmaster_get_or_create_attribute_term($name, $taxonomy, $slug = '') {
+    if (!taxonomy_exists($taxonomy)) {
+        return false;
+    }
+
+    $name = sanitize_text_field($name);
+    if ($name === '') {
+        return false;
+    }
+
+    $slug = sanitize_title($slug !== '' ? $slug : $name);
+    if ($slug === '') {
+        return false;
+    }
+
+    $term = get_term_by('slug', $slug, $taxonomy);
+    if (!$term) {
+        $term = get_term_by('name', $name, $taxonomy);
+    }
+    if (!$term) {
+        $term = wp_insert_term($name, $taxonomy, array('slug' => $slug));
+    }
+    if (is_wp_error($term) || !$term) {
+        return false;
+    }
+
+    if (is_array($term)) {
+        return get_term_by('id', (int) $term['term_id'], $taxonomy);
+    }
+
+    return $term;
+}
+
 function syncmaster_resolve_attribute_term_ids($names, $taxonomy) {
     if (!taxonomy_exists($taxonomy)) {
         return array();
@@ -344,16 +415,9 @@ function syncmaster_resolve_attribute_term_ids($names, $taxonomy) {
 
     $term_ids = array();
     foreach ($candidate_names as $name) {
-        $slug = sanitize_title($name);
-        $term = get_term_by('slug', $slug, $taxonomy);
-        if (!$term) {
-            $term = get_term_by('name', $name, $taxonomy);
-        }
-        if (!$term) {
-            $term = wp_insert_term($name, $taxonomy, array('slug' => $slug));
-        }
-        if (!is_wp_error($term) && $term) {
-            $term_ids[] = is_array($term) ? (int) $term['term_id'] : (int) $term->term_id;
+        $term = syncmaster_get_or_create_attribute_term($name, $taxonomy);
+        if ($term) {
+            $term_ids[] = (int) $term->term_id;
         }
     }
 
@@ -370,24 +434,52 @@ function syncmaster_get_attribute_term_slug($name, $taxonomy) {
         return '';
     }
 
-    $slug = sanitize_title($name);
-    $term = get_term_by('slug', $slug, $taxonomy);
+    $term = syncmaster_get_or_create_attribute_term($name, $taxonomy);
     if (!$term) {
-        $term = get_term_by('name', $name, $taxonomy);
-    }
-    if (!$term) {
-        $term = wp_insert_term($name, $taxonomy, array('slug' => $slug));
-    }
-    if (is_wp_error($term) || !$term) {
         return '';
     }
 
-    if (is_array($term)) {
-        $term_obj = get_term_by('id', (int) $term['term_id'], $taxonomy);
-        return $term_obj ? $term_obj->slug : $slug;
+    return $term->slug;
+}
+
+function syncmaster_collect_color_term_data($colors, $selected_colors = array()) {
+    $data = array();
+    foreach ((array) $colors as $color) {
+        if (!is_array($color)) {
+            continue;
+        }
+        $name = sanitize_text_field(syncmaster_extract_scalar($color['colorName'] ?? ($color['ColorName'] ?? '')));
+        if ($name === '') {
+            continue;
+        }
+        if (!empty($selected_colors) && !in_array($name, $selected_colors, true)) {
+            continue;
+        }
+
+        $slug = syncmaster_build_color_term_slug($color);
+        if ($slug === '') {
+            $slug = syncmaster_build_color_term_slug($name);
+        }
+        $data[$name] = array(
+            'name' => $name,
+            'slug' => $slug,
+        );
     }
 
-    return $term->slug;
+    if (empty($data) && !empty($selected_colors)) {
+        foreach ($selected_colors as $name) {
+            $name = sanitize_text_field($name);
+            if ($name === '') {
+                continue;
+            }
+            $data[$name] = array(
+                'name' => $name,
+                'slug' => syncmaster_build_color_term_slug($name),
+            );
+        }
+    }
+
+    return array_values($data);
 }
 
 function syncmaster_resolve_color_term_ids($colors, $selected_colors = array()) {
@@ -396,38 +488,56 @@ function syncmaster_resolve_color_term_ids($colors, $selected_colors = array()) 
         return array();
     }
 
-    $candidate_names = array();
-    if (!empty($selected_colors)) {
-        foreach ($selected_colors as $color_name) {
-            $color_name = sanitize_text_field($color_name);
-            if ($color_name !== '') {
-                $candidate_names[] = $color_name;
-            }
-        }
-    }
-
-    if (empty($candidate_names)) {
-        foreach ($colors as $color) {
-            $name = is_array($color) ? ($color['colorName'] ?? '') : $color;
-            $name = is_string($name) ? sanitize_text_field($name) : '';
-            if ($name !== '') {
-                $candidate_names[] = $name;
-            }
-        }
-    }
-
-    $candidate_names = array_values(array_unique($candidate_names));
-    if (empty($candidate_names)) {
+    $candidate_data = syncmaster_collect_color_term_data($colors, $selected_colors);
+    if (empty($candidate_data)) {
         return array();
     }
 
-    $term_ids = syncmaster_resolve_attribute_term_ids($candidate_names, $taxonomy);
+    $term_ids = array();
+    $candidate_names = array();
+    foreach ($candidate_data as $color_data) {
+        $name = $color_data['name'] ?? '';
+        $slug = $color_data['slug'] ?? '';
+        if ($name === '' || $slug === '') {
+            continue;
+        }
+        $candidate_names[] = $name;
+        $term = syncmaster_get_or_create_attribute_term($name, $taxonomy, $slug);
+        if ($term) {
+            $term_ids[] = (int) $term->term_id;
+        }
+    }
+
     $swatch_map = syncmaster_collect_color_swatch_map($colors);
     if (!empty($swatch_map)) {
-        syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, $swatch_map);
+        syncmaster_maybe_update_color_swatch_meta(array_values(array_unique($candidate_names)), $taxonomy, $swatch_map);
     }
 
     return $term_ids;
+}
+
+function syncmaster_collect_color_slug_map($colors, $selected_colors = array(), $color_taxonomy = null) {
+    $map = array();
+    $taxonomy = $color_taxonomy ?: syncmaster_get_color_taxonomy();
+    if (!taxonomy_exists($taxonomy)) {
+        return $map;
+    }
+
+    $candidate_data = syncmaster_collect_color_term_data($colors, $selected_colors);
+    foreach ($candidate_data as $color_data) {
+        $name = $color_data['name'] ?? '';
+        $slug = $color_data['slug'] ?? '';
+        if ($name === '' || $slug === '') {
+            continue;
+        }
+
+        $term = syncmaster_get_or_create_attribute_term($name, $taxonomy, $slug);
+        if ($term && !empty($term->slug)) {
+            $map[$name] = $term->slug;
+        }
+    }
+
+    return $map;
 }
 
 function syncmaster_apply_color_attributes($product, $term_ids, $taxonomy, $is_variable) {
@@ -673,7 +783,7 @@ function syncmaster_collect_color_size_image_map($colors, $selected_colors = arr
     return $map;
 }
 
-function syncmaster_collect_color_postbox_view_map($colors, $selected_colors = array(), $color_taxonomy = null) {
+function syncmaster_collect_color_postbox_view_map($colors, $selected_colors = array(), $color_taxonomy = null, $color_slug_map = array()) {
     $map = array();
     $taxonomy = $color_taxonomy ?: syncmaster_get_color_taxonomy();
 
@@ -686,7 +796,7 @@ function syncmaster_collect_color_postbox_view_map($colors, $selected_colors = a
             continue;
         }
 
-        $color_slug = syncmaster_get_attribute_term_slug($color_name, $taxonomy);
+        $color_slug = $color_slug_map[$color_name] ?? syncmaster_get_attribute_term_slug($color_name, $taxonomy);
         if ($color_slug === '') {
             continue;
         }
@@ -868,7 +978,7 @@ function syncmaster_round_up_price($price, $increment = 0.25) {
     return ceil($price / $increment) * $increment;
 }
 
-function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $color_size_sku_map, $color_size_qty_map, $color_size_price_map, $color_size_image_map, $color_taxonomy, $size_taxonomy, $margin_percent) {
+function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $color_size_sku_map, $color_size_qty_map, $color_size_price_map, $color_size_image_map, $color_taxonomy, $size_taxonomy, $margin_percent, $color_slug_map = array()) {
     $stats = array(
         'created' => 0,
         'deleted' => 0,
@@ -904,7 +1014,7 @@ function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $co
     }
 
     foreach ($color_size_map as $color_name => $size_names) {
-        $color_slug = syncmaster_get_attribute_term_slug($color_name, $color_taxonomy);
+        $color_slug = $color_slug_map[$color_name] ?? syncmaster_get_attribute_term_slug($color_name, $color_taxonomy);
         if ($color_slug === '') {
             $stats['skipped']++;
             $stats['errors'][] = 'missing_color_slug:' . $color_name;
@@ -1146,7 +1256,8 @@ function syncmaster_sync_monitored_products() {
         }
         $margin_percent = syncmaster_get_margin_percent_for_sku($sku, 50);
         $color_size_image_map = syncmaster_collect_color_size_image_map($colors, $selected_colors);
-        $color_postbox_view_map = syncmaster_collect_color_postbox_view_map($colors, $selected_colors, $color_taxonomy);
+        $color_slug_map = syncmaster_collect_color_slug_map($colors, $selected_colors, $color_taxonomy);
+        $color_postbox_view_map = syncmaster_collect_color_postbox_view_map($colors, $selected_colors, $color_taxonomy, $color_slug_map);
         if ($product_id) {
             syncmaster_set_product_type_term($product_id, $is_variable);
             $product = $is_variable ? new WC_Product_Variable($product_id) : new WC_Product_Simple($product_id);
@@ -1233,7 +1344,8 @@ function syncmaster_sync_monitored_products() {
                     $color_size_image_map,
                     $color_taxonomy,
                     $size_taxonomy,
-                    $margin_percent
+                    $margin_percent,
+                    $color_slug_map
                 );
                 if (!empty($variation_stats['errors'])) {
                     syncmaster_write_log(
@@ -1687,6 +1799,8 @@ function syncmaster_get_style_colors($style_title) {
                 if (!isset($colors[$color_code])) {
                     $colors[$color_code] = array(
                         'colorCode' => $color_code,
+                        'colorFamily' => syncmaster_extract_scalar($item['colorFamily'] ?? ($item['ColorFamily'] ?? '')),
+                        'colorGroupName' => syncmaster_extract_scalar($item['colorGroupName'] ?? ($item['ColorGroupName'] ?? '')),
                         'colorName' => syncmaster_extract_scalar($item['colorName'] ?? ($item['ColorName'] ?? '')),
                         'colorFrontImage' => syncmaster_extract_scalar($item['colorFrontImage'] ?? ($item['ColorFrontImage'] ?? '')),
                         'colorBackImage' => syncmaster_extract_scalar($item['colorBackImage'] ?? ($item['ColorBackImage'] ?? '')),
@@ -1710,6 +1824,12 @@ function syncmaster_get_style_colors($style_title) {
                 }
                 if (empty($colors[$color_code]['colorSideImage'])) {
                     $colors[$color_code]['colorSideImage'] = syncmaster_extract_scalar($item['colorSideImage'] ?? ($item['ColorSideImage'] ?? ''));
+                }
+                if (empty($colors[$color_code]['colorFamily'])) {
+                    $colors[$color_code]['colorFamily'] = syncmaster_extract_scalar($item['colorFamily'] ?? ($item['ColorFamily'] ?? ''));
+                }
+                if (empty($colors[$color_code]['colorGroupName'])) {
+                    $colors[$color_code]['colorGroupName'] = syncmaster_extract_scalar($item['colorGroupName'] ?? ($item['ColorGroupName'] ?? ''));
                 }
                 $size_name = sanitize_text_field(syncmaster_extract_scalar($item['sizeName'] ?? ($item['SizeName'] ?? '')));
                 if ($size_name !== '') {
