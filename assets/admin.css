@@ -114,6 +114,24 @@
     gap: 10px;
 }
 
+.syncmaster-products-tabs {
+    margin-bottom: 14px;
+}
+
+.syncmaster-category-sync-form {
+    margin-top: 12px;
+}
+
+.syncmaster-category-table th,
+.syncmaster-category-table td {
+    vertical-align: middle;
+}
+
+.syncmaster-category-table input[type="text"],
+.syncmaster-category-table select {
+    width: 100%;
+}
+
 .syncmaster-search input[type="search"] {
     flex: 1;
     padding: 8px 12px;
