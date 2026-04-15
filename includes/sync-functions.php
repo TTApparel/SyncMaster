@@ -125,10 +125,6 @@ function syncmaster_get_category_sync_rules() {
     return $rules;
 }
 
-function syncmaster_should_sync_all_categories() {
-    return (bool) get_option('syncmaster_sync_all_categories', false);
-}
-
 function syncmaster_fetch_ss_categories() {
     $cache_key = 'syncmaster_ss_categories_v1';
     $cached = get_transient($cache_key);
@@ -261,7 +257,6 @@ function syncmaster_handle_save_categories() {
     }
 
     update_option('syncmaster_category_sync_rules', $rules);
-    update_option('syncmaster_sync_all_categories', !empty($_POST['syncmaster_sync_all_categories']) ? 1 : 0);
     delete_transient('syncmaster_selected_category_style_ids');
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&products_tab=categories&categories_saved=1'));
@@ -1220,31 +1215,20 @@ function syncmaster_get_selected_category_style_ids() {
         return $cached;
     }
 
-    $sync_all_categories = syncmaster_should_sync_all_categories();
     $rules = syncmaster_get_category_sync_rules();
     $enabled_categories = array();
-    if (!$sync_all_categories) {
-        foreach ($rules as $source_name => $rule) {
-            if (!empty($rule['enabled'])) {
-                $enabled_categories[] = $source_name;
-            }
+    foreach ($rules as $source_name => $rule) {
+        if (!empty($rule['enabled'])) {
+            $enabled_categories[] = $source_name;
         }
     }
 
-    if (!$sync_all_categories && empty($enabled_categories)) {
+    if (empty($enabled_categories)) {
         return array();
     }
 
-    $response = wp_remote_get(SYNCMASTER_STYLES_API_URL, array(
-        'timeout' => 45,
-        'headers' => syncmaster_get_ss_api_headers(),
-    ));
-    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
-        return array();
-    }
-
-    $data = json_decode(wp_remote_retrieve_body($response), true);
-    if (!is_array($data)) {
+    $data = syncmaster_fetch_all_ss_styles();
+    if (empty($data)) {
         return array();
     }
 
@@ -1259,7 +1243,7 @@ function syncmaster_get_selected_category_style_ids() {
         if ($style_id === '' || $base_category === '') {
             continue;
         }
-        if (!$sync_all_categories && !isset($enabled_lookup[$base_category])) {
+        if (!isset($enabled_lookup[$base_category])) {
             continue;
         }
         $style_ids[] = $style_id;
@@ -1269,6 +1253,64 @@ function syncmaster_get_selected_category_style_ids() {
     set_transient($cache_key, $style_ids, 15 * MINUTE_IN_SECONDS);
 
     return $style_ids;
+}
+
+function syncmaster_fetch_all_ss_styles() {
+    $headers = syncmaster_get_ss_api_headers();
+    $all_styles = array();
+    $page = 1;
+    $page_size = 500;
+    $max_pages = 200;
+
+    while ($page <= $max_pages) {
+        $endpoint = add_query_arg(
+            array(
+                'page' => $page,
+                'pageSize' => $page_size,
+            ),
+            SYNCMASTER_STYLES_API_URL
+        );
+        $response = wp_remote_get($endpoint, array(
+            'timeout' => 45,
+            'headers' => $headers,
+        ));
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            $all_styles = array();
+            break;
+        }
+
+        $chunk = json_decode(wp_remote_retrieve_body($response), true);
+        if (!is_array($chunk) || empty($chunk)) {
+            break;
+        }
+
+        foreach ($chunk as $row) {
+            if (is_array($row)) {
+                $all_styles[] = $row;
+            }
+        }
+
+        if (count($chunk) < $page_size) {
+            break;
+        }
+
+        $page++;
+    }
+
+    if (!empty($all_styles)) {
+        return $all_styles;
+    }
+
+    $response = wp_remote_get(SYNCMASTER_STYLES_API_URL, array(
+        'timeout' => 45,
+        'headers' => $headers,
+    ));
+    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+        return array();
+    }
+
+    $single = json_decode(wp_remote_retrieve_body($response), true);
+    return is_array($single) ? $single : array();
 }
 
 function syncmaster_get_mapped_product_category_names($category_name) {
@@ -1395,7 +1437,9 @@ function syncmaster_sync_monitored_products() {
         }
     }
     $category_skus = syncmaster_get_selected_category_style_ids();
-    $sync_queue = array_values(array_unique(array_merge($monitored_skus, $category_skus)));
+    $sync_queue = !empty($category_skus)
+        ? array_values(array_unique($category_skus))
+        : array_values(array_unique($monitored_skus));
     $monitored_count = count($sync_queue);
     $color_selections = syncmaster_get_color_selections();
     $color_taxonomy = syncmaster_get_color_taxonomy();
@@ -1661,6 +1705,7 @@ function syncmaster_sync_monitored_products() {
         'queue_source_counts' => array(
             'monitored_products' => count($monitored_skus),
             'category_styles' => count($category_skus),
+            'active_queue_source' => !empty($category_skus) ? 'categories' : 'monitored_products',
         ),
     );
 }

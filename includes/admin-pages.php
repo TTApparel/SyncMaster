@@ -157,7 +157,6 @@ function syncmaster_render_products() {
     $margin_settings = syncmaster_get_margin_settings();
     $category_index = syncmaster_fetch_ss_categories();
     $category_sync_rules = syncmaster_get_category_sync_rules();
-    $sync_all_categories = syncmaster_should_sync_all_categories();
     $woo_categories = get_terms(array(
         'taxonomy' => 'product_cat',
         'hide_empty' => false,
@@ -204,13 +203,6 @@ function syncmaster_render_products() {
                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="syncmaster-category-sync-form">
                     <?php wp_nonce_field('syncmaster_save_categories'); ?>
                     <input type="hidden" name="action" value="syncmaster_save_categories">
-                    <p class="syncmaster-category-bulk-toggle">
-                        <label>
-                            <input type="checkbox" name="syncmaster_sync_all_categories" value="1" <?php checked($sync_all_categories); ?>>
-                            <strong><?php echo esc_html__('Sync all S&S categories at once', 'syncmaster'); ?></strong>
-                        </label>
-                        <span class="syncmaster-muted"><?php echo esc_html__('When enabled, one sync run will include every style from every S&S category in the style index.', 'syncmaster'); ?></span>
-                    </p>
                     <p class="syncmaster-category-actions">
                         <button type="button" class="button syncmaster-select-all-categories"><?php echo esc_html__('Enable All', 'syncmaster'); ?></button>
                         <button type="button" class="button syncmaster-clear-all-categories"><?php echo esc_html__('Disable All', 'syncmaster'); ?></button>
