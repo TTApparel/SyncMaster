@@ -358,6 +358,7 @@ function syncmaster_render_products() {
                     $grouped_monitored[$primary_group][] = array(
                         'item' => $item,
                         'style' => $style,
+                        'mapped_names' => $mapped_names,
                     );
                 }
                 ksort($grouped_monitored, SORT_NATURAL | SORT_FLAG_CASE);
@@ -387,6 +388,7 @@ function syncmaster_render_products() {
                             <?php foreach ($group_items as $group_item) : ?>
                                 <?php $item = $group_item['item']; ?>
                                 <?php $style = $group_item['style']; ?>
+                                <?php $mapped_names = $group_item['mapped_names'] ?? array(); ?>
                                 <?php $colors = syncmaster_get_style_colors($style['title']); ?>
                                 <?php $has_color_selection = array_key_exists($item['sku'], $color_selections); ?>
                                 <?php $selected_colors = $color_selections[$item['sku']] ?? array(); ?>
@@ -401,7 +403,12 @@ function syncmaster_render_products() {
                                             </label>
                                             <strong><?php echo esc_html($style['title']); ?></strong>
                                             <span class="syncmaster-muted">
-                                                <?php echo esc_html(sprintf(__('BaseCategory: %s', 'syncmaster'), $style['baseCategory'])); ?>
+                                                <?php
+                                                $woo_category_label = !empty($mapped_names)
+                                                    ? implode(', ', array_map('sanitize_text_field', $mapped_names))
+                                                    : __('Unmapped', 'syncmaster');
+                                                echo esc_html(sprintf(__('Woo Categories: %s', 'syncmaster'), $woo_category_label));
+                                                ?>
                                             </span>
                                             <button class="button-link syncmaster-toggle-colors" type="button" data-target="<?php echo esc_attr($panel_id); ?>">
                                                 <?php echo esc_html__('View Colors', 'syncmaster'); ?>
