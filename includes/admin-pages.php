@@ -61,7 +61,7 @@ function syncmaster_render_shell($active = 'dashboard', $content = '') {
     );
     $sync_progress = function_exists('syncmaster_get_sync_progress_status')
         ? syncmaster_get_sync_progress_status()
-        : array('active' => false, 'percent' => 0, 'offset' => 0, 'total' => 0, 'success' => 0, 'fail' => 0);
+        : array('active' => false, 'percent' => 0, 'offset' => 0, 'total' => 0, 'processed' => 0, 'success' => 0, 'fail' => 0);
     ?>
     <div class="wrap syncmaster-admin">
         <div class="syncmaster-header">
@@ -112,11 +112,11 @@ function syncmaster_render_shell($active = 'dashboard', $content = '') {
                 <?php
                 if (!empty($sync_progress['active'])) {
                     echo esc_html(sprintf(
-                        __('Sync Progress: %1$d%% (%2$d/%3$d) · Success: %4$d · Fail: %5$d', 'syncmaster'),
+                        __('Sync Success: %1$d%% (%2$d/%3$d successful) · Processed: %4$d/%3$d · Fail: %5$d', 'syncmaster'),
                         (int) ($sync_progress['percent'] ?? 0),
-                        (int) ($sync_progress['offset'] ?? 0),
-                        (int) ($sync_progress['total'] ?? 0),
                         (int) ($sync_progress['success'] ?? 0),
+                        (int) ($sync_progress['total'] ?? 0),
+                        (int) ($sync_progress['processed'] ?? 0),
                         (int) ($sync_progress['fail'] ?? 0)
                     ));
                 } else {
