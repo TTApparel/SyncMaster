@@ -669,7 +669,10 @@ function syncmaster_process_sync_batch() {
     update_option('syncmaster_active_sync_job', $job, false);
 
     if ($job['offset'] < $total) {
-        wp_schedule_single_event(time() + 2, 'syncmaster_process_sync_batch');
+        wp_schedule_single_event(time() + 1, 'syncmaster_process_sync_batch');
+        if (function_exists('spawn_cron')) {
+            spawn_cron();
+        }
         return;
     }
 
