@@ -740,6 +740,11 @@ function syncmaster_maybe_run_interval_sync() {
         return;
     }
 
+    $active_job = get_option('syncmaster_active_sync_job', array());
+    if (is_array($active_job) && !empty($active_job)) {
+        return;
+    }
+
     $lock_key = 'syncmaster_interval_sync_lock';
     if (get_transient($lock_key)) {
         return;
@@ -762,7 +767,7 @@ function syncmaster_maybe_run_interval_sync() {
         'last_run' => $last_run,
         'interval_seconds' => $interval_seconds,
     ));
-    syncmaster_run_sync_placeholder('interval_fallback');
+    syncmaster_start_background_sync('interval_fallback', array('mode' => 'full'));
     delete_transient($lock_key);
 }
 
