@@ -59,6 +59,9 @@ function syncmaster_render_shell($active = 'dashboard', $content = '') {
         'logs' => array('label' => __('Sync Logs', 'syncmaster'), 'slug' => 'syncmaster_logs'),
         'settings' => array('label' => __('Settings', 'syncmaster'), 'slug' => 'syncmaster_settings'),
     );
+    $sync_progress = function_exists('syncmaster_get_sync_progress_status')
+        ? syncmaster_get_sync_progress_status()
+        : array('active' => false, 'percent' => 0, 'offset' => 0, 'total' => 0, 'success' => 0, 'fail' => 0);
     ?>
     <div class="wrap syncmaster-admin">
         <div class="syncmaster-header">
@@ -97,6 +100,31 @@ function syncmaster_render_shell($active = 'dashboard', $content = '') {
                 <p><?php echo esc_html__('Sync queued in background. Refresh Sync Logs for progress.', 'syncmaster'); ?></p>
             </div>
         <?php endif; ?>
+        <div
+            class="syncmaster-progress <?php echo !empty($sync_progress['active']) ? 'is-active' : ''; ?>"
+            id="syncmaster-sync-progress"
+            data-active="<?php echo !empty($sync_progress['active']) ? '1' : '0'; ?>"
+        >
+            <div class="syncmaster-progress-bar">
+                <span style="width: <?php echo esc_attr((int) ($sync_progress['percent'] ?? 0)); ?>%"></span>
+            </div>
+            <p class="syncmaster-progress-text">
+                <?php
+                if (!empty($sync_progress['active'])) {
+                    echo esc_html(sprintf(
+                        __('Sync Progress: %1$d%% (%2$d/%3$d) · Success: %4$d · Fail: %5$d', 'syncmaster'),
+                        (int) ($sync_progress['percent'] ?? 0),
+                        (int) ($sync_progress['offset'] ?? 0),
+                        (int) ($sync_progress['total'] ?? 0),
+                        (int) ($sync_progress['success'] ?? 0),
+                        (int) ($sync_progress['fail'] ?? 0)
+                    ));
+                } else {
+                    echo esc_html__('No active sync job.', 'syncmaster');
+                }
+                ?>
+            </p>
+        </div>
         <div class="syncmaster-layout">
             <aside class="syncmaster-sidebar">
                 <nav>

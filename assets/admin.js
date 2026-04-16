@@ -97,4 +97,38 @@
             $('<input type="hidden" name="skus[]">').val(sku).appendTo($form);
         });
     });
+
+    function refreshSyncProgress() {
+        var progressBox = document.getElementById('syncmaster-sync-progress');
+        if (!progressBox || typeof syncmasterAdmin === 'undefined') {
+            return;
+        }
+
+        $.post(syncmasterAdmin.ajaxUrl, {
+            action: 'syncmaster_sync_progress',
+            nonce: syncmasterAdmin.progressNonce
+        }).done(function (response) {
+            if (!response || !response.success || !response.data) {
+                return;
+            }
+            var data = response.data;
+            var bar = progressBox.querySelector('.syncmaster-progress-bar span');
+            var text = progressBox.querySelector('.syncmaster-progress-text');
+            if (bar) {
+                bar.style.width = (data.percent || 0) + '%';
+            }
+            if (text) {
+                if (data.active) {
+                    text.textContent = 'Sync Progress: ' + (data.percent || 0) + '% (' + (data.offset || 0) + '/' + (data.total || 0) + ') · Success: ' + (data.success || 0) + ' · Fail: ' + (data.fail || 0);
+                    progressBox.classList.add('is-active');
+                } else {
+                    text.textContent = 'No active sync job.';
+                    progressBox.classList.remove('is-active');
+                }
+            }
+        });
+    }
+
+    refreshSyncProgress();
+    setInterval(refreshSyncProgress, 4000);
 })(jQuery);

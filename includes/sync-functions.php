@@ -669,6 +669,44 @@ function syncmaster_process_sync_batch() {
     );
 }
 
+function syncmaster_get_sync_progress_status() {
+    $job = get_option('syncmaster_active_sync_job', array());
+    if (!is_array($job) || empty($job)) {
+        return array(
+            'active' => false,
+            'offset' => 0,
+            'total' => 0,
+            'percent' => 0,
+            'success' => 0,
+            'fail' => 0,
+            'mode' => 'full',
+        );
+    }
+
+    $offset = max(0, (int) ($job['offset'] ?? 0));
+    $total = max(0, (int) ($job['total'] ?? 0));
+    $percent = $total > 0 ? min(100, (int) floor(($offset / $total) * 100)) : 0;
+
+    return array(
+        'active' => true,
+        'offset' => $offset,
+        'total' => $total,
+        'percent' => $percent,
+        'success' => (int) ($job['success'] ?? 0),
+        'fail' => (int) ($job['fail'] ?? 0),
+        'mode' => sanitize_text_field($job['mode'] ?? 'full'),
+    );
+}
+
+function syncmaster_handle_sync_progress() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('message' => __('Unauthorized', 'syncmaster')), 403);
+    }
+
+    check_ajax_referer('syncmaster_sync_progress', 'nonce');
+    wp_send_json_success(syncmaster_get_sync_progress_status());
+}
+
 function syncmaster_maybe_run_interval_sync() {
     if (wp_doing_cron() || wp_doing_ajax()) {
         return;
