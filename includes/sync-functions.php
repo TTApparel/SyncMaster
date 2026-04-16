@@ -619,9 +619,7 @@ function syncmaster_start_background_sync($source = 'unknown', $options = array(
         'created' => 0,
         'updated' => 0,
         'mode' => sanitize_text_field($options['mode'] ?? 'full'),
-        'explicit_queue' => isset($options['explicit_queue']) && is_array($options['explicit_queue'])
-            ? array_values(array_unique(array_map('sanitize_text_field', $options['explicit_queue'])))
-            : array(),
+        'explicit_queue' => array_values($queue['sync_queue']),
     ), false);
 
     syncmaster_write_log('info', __('Background sync queued.', 'syncmaster'), 0, 0, array(
@@ -647,7 +645,7 @@ function syncmaster_process_sync_batch() {
 
     $offset = isset($job['offset']) ? (int) $job['offset'] : 0;
     $total = isset($job['total']) ? (int) $job['total'] : 0;
-    $batch_size = 20;
+    $batch_size = 1;
 
     if ($offset >= $total) {
         delete_option('syncmaster_active_sync_job');
@@ -701,6 +699,7 @@ function syncmaster_get_sync_progress_status() {
             'active' => false,
             'offset' => 0,
             'total' => 0,
+            'processed' => 0,
             'percent' => 0,
             'success' => 0,
             'fail' => 0,
@@ -710,15 +709,19 @@ function syncmaster_get_sync_progress_status() {
 
     $offset = max(0, (int) ($job['offset'] ?? 0));
     $total = max(0, (int) ($job['total'] ?? 0));
-    $percent = $total > 0 ? min(100, (int) floor(($offset / $total) * 100)) : 0;
+    $success = max(0, (int) ($job['success'] ?? 0));
+    $fail = max(0, (int) ($job['fail'] ?? 0));
+    $processed = min($total, $success + $fail);
+    $percent = $total > 0 ? min(100, (int) floor(($success / $total) * 100)) : 0;
 
     return array(
         'active' => true,
         'offset' => $offset,
         'total' => $total,
+        'processed' => $processed,
         'percent' => $percent,
-        'success' => (int) ($job['success'] ?? 0),
-        'fail' => (int) ($job['fail'] ?? 0),
+        'success' => $success,
+        'fail' => $fail,
         'mode' => sanitize_text_field($job['mode'] ?? 'full'),
     );
 }
@@ -734,6 +737,11 @@ function syncmaster_handle_sync_progress() {
 
 function syncmaster_maybe_run_interval_sync() {
     if (wp_doing_cron() || wp_doing_ajax()) {
+        return;
+    }
+
+    $active_job = get_option('syncmaster_active_sync_job', array());
+    if (is_array($active_job) && !empty($active_job)) {
         return;
     }
 
@@ -759,7 +767,7 @@ function syncmaster_maybe_run_interval_sync() {
         'last_run' => $last_run,
         'interval_seconds' => $interval_seconds,
     ));
-    syncmaster_run_sync_placeholder('interval_fallback');
+    syncmaster_start_background_sync('interval_fallback', array('mode' => 'full'));
     delete_transient($lock_key);
 }
 
@@ -1837,6 +1845,59 @@ function syncmaster_set_product_type_term($product_id, $is_variable) {
     );
 }
 
+function syncmaster_get_product_id_by_api_sku($api_sku) {
+    $api_sku = sanitize_text_field($api_sku);
+    if ($api_sku === '') {
+        return 0;
+    }
+
+    if (function_exists('wc_get_product_id_by_sku')) {
+        $product_id = (int) wc_get_product_id_by_sku($api_sku);
+        if ($product_id > 0) {
+            return $product_id;
+        }
+    }
+
+    $matched_ids = get_posts(array(
+        'post_type' => array('product', 'product_variation'),
+        'post_status' => array('publish', 'private', 'draft', 'pending', 'future'),
+        'fields' => 'ids',
+        'posts_per_page' => 1,
+        'meta_key' => '_global_unique_id',
+        'meta_value' => $api_sku,
+    ));
+    if (empty($matched_ids)) {
+        return 0;
+    }
+
+    $matched_id = (int) $matched_ids[0];
+    if ($matched_id <= 0) {
+        return 0;
+    }
+
+    if (get_post_type($matched_id) === 'product_variation') {
+        return (int) wp_get_post_parent_id($matched_id);
+    }
+
+    return $matched_id;
+}
+
+function syncmaster_set_product_global_identifier($product_or_id, $api_sku) {
+    $api_sku = sanitize_text_field($api_sku);
+    if ($api_sku === '') {
+        return;
+    }
+
+    if (is_object($product_or_id) && method_exists($product_or_id, 'set_global_unique_id')) {
+        $product_or_id->set_global_unique_id($api_sku);
+    }
+
+    $product_id = is_numeric($product_or_id) ? (int) $product_or_id : 0;
+    if ($product_id > 0) {
+        update_post_meta($product_id, '_global_unique_id', $api_sku);
+    }
+}
+
 function syncmaster_set_featured_image($product_id, $image_url) {
     $image_url = syncmaster_normalize_ss_image_url($image_url);
     if ($image_url === '') {
@@ -1877,19 +1938,54 @@ function syncmaster_get_current_sync_queue($options = array()) {
         : array();
     $selected_category_style_map = syncmaster_get_selected_category_style_map();
     $category_skus = array_keys($selected_category_style_map);
-    if (!empty($explicit_queue)) {
+    $has_explicit_queue = !empty($explicit_queue);
+    if ($has_explicit_queue) {
         $sync_queue = $explicit_queue;
     } else {
         $sync_queue = !empty($category_skus)
             ? array_values(array_unique($category_skus))
             : array_values(array_unique($monitored_skus));
     }
+
+    if (!$has_explicit_queue) {
+        $mode = sanitize_text_field($options['mode'] ?? 'full');
+        $sync_queue = syncmaster_filter_sync_queue_for_mode($sync_queue, $mode);
+    }
+
     return array(
         'sync_queue' => $sync_queue,
         'selected_category_style_map' => $selected_category_style_map,
         'monitored_skus' => $monitored_skus,
         'category_skus' => $category_skus,
     );
+}
+
+function syncmaster_filter_sync_queue_for_mode($sync_queue, $mode = 'full') {
+    if (!is_array($sync_queue) || empty($sync_queue)) {
+        return array();
+    }
+
+    $mode = sanitize_text_field($mode);
+    $normalized_queue = array_values(array_unique(array_filter(array_map('sanitize_text_field', $sync_queue))));
+    if ($mode === 'full') {
+        return $normalized_queue;
+    }
+
+    if (!function_exists('wc_get_product_id_by_sku')) {
+        return $normalized_queue;
+    }
+
+    $filtered_queue = array();
+    foreach ($normalized_queue as $sku) {
+        $existing_product_id = (int) wc_get_product_id_by_sku($sku);
+        if ($mode === 'new_only' && $existing_product_id <= 0) {
+            $filtered_queue[] = $sku;
+        } elseif ($mode === 'inventory_variations_only' && $existing_product_id > 0) {
+            $filtered_queue[] = $sku;
+        }
+    }
+
+    return $filtered_queue;
 }
 
 function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = array()) {
@@ -1939,7 +2035,7 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
         }
         $mapped = syncmaster_map_product_data($api_item);
         $desired_sku = $mapped['sku'] !== '' ? $mapped['sku'] : $sku;
-        $product_id_by_monitored_sku = wc_get_product_id_by_sku($sku);
+        $product_id_by_monitored_sku = syncmaster_get_product_id_by_api_sku($sku);
         $product_id_by_desired_sku = $desired_sku !== '' ? wc_get_product_id_by_sku($desired_sku) : 0;
         $product_id = $product_id_by_monitored_sku;
         $product_match_source = $product_id ? 'monitored_sku' : 'new_product';
@@ -2017,6 +2113,7 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
         }
 
         $product->set_name($mapped['name'] !== '' ? $mapped['name'] : sprintf(__('Synced SKU %s', 'syncmaster'), $sku));
+        syncmaster_set_product_global_identifier($product, $sku);
         $existing_id = wc_get_product_id_by_sku($desired_sku);
         if ($existing_id && $existing_id !== $product_id) {
             $fail++;
@@ -2062,6 +2159,7 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
         );
 
         if ($saved_id) {
+            syncmaster_set_product_global_identifier($saved_id, $sku);
             syncmaster_assign_color_terms($saved_id, $color_term_ids, $color_taxonomy);
             syncmaster_assign_size_terms($saved_id, $size_term_ids, $size_taxonomy);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
