@@ -85,6 +85,262 @@ function syncmaster_get_margin_percent_for_sku($sku, $default = 50) {
     return (float) $default;
 }
 
+function syncmaster_get_ss_api_headers() {
+    $headers = array(
+        'Accept' => 'application/json',
+        'Content-Type' => 'application/json',
+    );
+
+    $username = get_option('ss_username', '');
+    $password = get_option('ss_password', '');
+    if ($username !== '' && $password !== '') {
+        $headers['Authorization'] = 'Basic ' . base64_encode($username . ':' . $password);
+    }
+
+    return $headers;
+}
+
+function syncmaster_get_category_sync_rules() {
+    $stored = get_option('syncmaster_category_sync_rules', array());
+    if (!is_array($stored)) {
+        return array();
+    }
+
+    $rules = array();
+    foreach ($stored as $legacy_key => $rule) {
+        $legacy_key = sanitize_text_field($legacy_key);
+        if ($legacy_key === '' || !is_array($rule)) {
+            continue;
+        }
+        $source_id = sanitize_text_field($rule['source_id'] ?? $legacy_key);
+        $source_name = sanitize_text_field($rule['source_name'] ?? $legacy_key);
+        if ($source_id === '') {
+            continue;
+        }
+
+        $mode = ($rule['mode'] ?? '') === 'existing' ? 'existing' : 'create';
+        $rules[$source_id] = array(
+            'enabled' => !empty($rule['enabled']),
+            'mode' => $mode,
+            'target_term_id' => (int) ($rule['target_term_id'] ?? 0),
+            'new_name' => sanitize_text_field($rule['new_name'] ?? ''),
+            'source_name' => $source_name,
+            'source_id' => $source_id,
+        );
+    }
+
+    return $rules;
+}
+
+function syncmaster_fetch_ss_categories() {
+    $cache_key = 'syncmaster_ss_categories_v2';
+    $cached = get_transient($cache_key);
+    if (is_array($cached)) {
+        return $cached;
+    }
+
+    $response = wp_remote_get(SYNCMASTER_CATEGORIES_API_URL, array(
+        'timeout' => 25,
+        'headers' => syncmaster_get_ss_api_headers(),
+    ));
+    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+        return array();
+    }
+
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    if (!is_array($data)) {
+        return array();
+    }
+
+    $style_counts = syncmaster_get_style_counts_by_category_id();
+    $categories = array();
+    foreach ($data as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $name = sanitize_text_field(syncmaster_extract_scalar($row['categoryName'] ?? ($row['name'] ?? ($row['CategoryName'] ?? ''))));
+        $category_id = sanitize_text_field(syncmaster_extract_scalar($row['categoryID'] ?? ($row['CategoryID'] ?? ($row['id'] ?? ''))));
+        if ($name === '' || $category_id === '') {
+            continue;
+        }
+
+        $categories[] = array(
+            'id' => $category_id,
+            'name' => $name,
+            'style_count' => (int) ($style_counts[$category_id] ?? 0),
+        );
+    }
+
+    usort($categories, function ($a, $b) {
+        return strcasecmp($a['name'], $b['name']);
+    });
+    set_transient($cache_key, $categories, HOUR_IN_SECONDS);
+
+    return $categories;
+}
+
+function syncmaster_extract_style_category_ids($style_row) {
+    if (!is_array($style_row)) {
+        return array();
+    }
+
+    $raw_categories = $style_row['categories'] ?? ($style_row['Categories'] ?? array());
+    $ids = array();
+
+    if (is_string($raw_categories)) {
+        $parts = preg_split('/[\s,;|]+/', $raw_categories);
+        if (is_array($parts)) {
+            $ids = $parts;
+        }
+    } elseif (is_numeric($raw_categories)) {
+        $ids[] = (string) $raw_categories;
+    } elseif (is_array($raw_categories)) {
+        if (isset($raw_categories['string'])) {
+            $raw_categories = $raw_categories['string'];
+        }
+        foreach ($raw_categories as $value) {
+            $ids[] = syncmaster_extract_scalar($value);
+        }
+    } else {
+        $ids[] = syncmaster_extract_scalar($raw_categories);
+    }
+
+    $normalized = array();
+    foreach ($ids as $id) {
+        $id = sanitize_text_field((string) $id);
+        if ($id !== '') {
+            $normalized[] = $id;
+        }
+    }
+
+    return array_values(array_unique($normalized));
+}
+
+function syncmaster_normalize_style_category_rows($decoded_payload) {
+    if (!is_array($decoded_payload)) {
+        return array();
+    }
+
+    if (isset($decoded_payload['Style'])) {
+        $decoded_payload = $decoded_payload['Style'];
+    } elseif (isset($decoded_payload['ArrayOfStyle']['Style'])) {
+        $decoded_payload = $decoded_payload['ArrayOfStyle']['Style'];
+    }
+
+    if (!isset($decoded_payload[0])) {
+        $decoded_payload = array($decoded_payload);
+    }
+
+    $rows = array();
+    foreach ($decoded_payload as $row) {
+        if (is_array($row)) {
+            $rows[] = $row;
+        }
+    }
+
+    return $rows;
+}
+
+function syncmaster_fetch_style_category_index() {
+    $cache_key = 'syncmaster_style_category_index_v2';
+    $cached = get_transient($cache_key);
+    if (is_array($cached)) {
+        return $cached;
+    }
+
+    $headers = syncmaster_get_ss_api_headers();
+    $all_styles = array();
+    $page = 1;
+    $page_size = 500;
+    $max_pages = 200;
+    $last_page_signature = '';
+
+    while ($page <= $max_pages) {
+        $endpoint = add_query_arg(
+            array(
+                'fields' => 'categories,styleID',
+                'page' => $page,
+                'pageSize' => $page_size,
+            ),
+            SYNCMASTER_STYLES_API_URL
+        );
+        $response = wp_remote_get($endpoint, array(
+            'timeout' => 45,
+            'headers' => $headers,
+        ));
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            $all_styles = array();
+            break;
+        }
+
+        $body = wp_remote_retrieve_body($response);
+        $decoded = syncmaster_parse_api_response($body);
+        $chunk = syncmaster_normalize_style_category_rows($decoded);
+        if (empty($chunk)) {
+            break;
+        }
+
+        foreach ($chunk as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $style_id = sanitize_text_field(syncmaster_extract_scalar($row['styleID'] ?? ($row['StyleID'] ?? '')));
+            if ($style_id === '') {
+                continue;
+            }
+            $category_ids = syncmaster_extract_style_category_ids($row);
+            $all_styles[] = array(
+                'style_id' => $style_id,
+                'category_ids' => $category_ids,
+            );
+        }
+
+        $first_style = isset($chunk[0]) && is_array($chunk[0]) ? syncmaster_extract_scalar($chunk[0]['styleID'] ?? ($chunk[0]['StyleID'] ?? '')) : '';
+        $last_row = end($chunk);
+        $last_style = is_array($last_row) ? syncmaster_extract_scalar($last_row['styleID'] ?? ($last_row['StyleID'] ?? '')) : '';
+        $current_signature = md5((string) $first_style . '|' . (string) $last_style . '|' . count($chunk));
+        if ($page > 1 && $current_signature === $last_page_signature) {
+            break;
+        }
+        $last_page_signature = $current_signature;
+
+        if (count($chunk) < $page_size) {
+            break;
+        }
+
+        $page++;
+    }
+
+    set_transient($cache_key, $all_styles, 15 * MINUTE_IN_SECONDS);
+    return $all_styles;
+}
+
+function syncmaster_get_style_counts_by_category_id() {
+    $styles = syncmaster_fetch_style_category_index();
+    if (empty($styles)) {
+        return array();
+    }
+
+    $counts = array();
+    foreach ($styles as $style) {
+        if (!is_array($style) || empty($style['category_ids']) || !is_array($style['category_ids'])) {
+            continue;
+        }
+        foreach ($style['category_ids'] as $category_id) {
+            $category_id = sanitize_text_field($category_id);
+            if ($category_id === '') {
+                continue;
+            }
+            if (!isset($counts[$category_id])) {
+                $counts[$category_id] = 0;
+            }
+            $counts[$category_id]++;
+        }
+    }
+
+    return $counts;
+}
+
 function syncmaster_handle_save_settings() {
     if (!current_user_can('manage_options')) {
         wp_die(__('Unauthorized', 'syncmaster'));
@@ -134,6 +390,78 @@ function syncmaster_handle_save_margin() {
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&margin_saved=1'));
     exit;
+}
+
+function syncmaster_handle_save_categories() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_save_categories');
+
+    $posted_rows = $_POST['syncmaster_categories'] ?? array();
+    $rules = array();
+    if (is_array($posted_rows)) {
+        foreach ($posted_rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $source_name = sanitize_text_field(wp_unslash($row['source_name'] ?? ''));
+            $source_id = sanitize_text_field(wp_unslash($row['source_id'] ?? ''));
+            if ($source_name === '' || $source_id === '') {
+                continue;
+            }
+
+            $mode = sanitize_key(wp_unslash($row['mode'] ?? 'create'));
+            if (!in_array($mode, array('create', 'existing'), true)) {
+                $mode = 'create';
+            }
+
+            $rules[$source_id] = array(
+                'enabled' => !empty($row['enabled']),
+                'mode' => $mode,
+                'target_term_id' => (int) ($row['target_term_id'] ?? 0),
+                'new_name' => sanitize_text_field(wp_unslash($row['new_name'] ?? '')),
+                'source_name' => $source_name,
+                'source_id' => $source_id,
+            );
+        }
+    }
+
+    update_option('syncmaster_category_sync_rules', $rules);
+    delete_transient('syncmaster_selected_category_style_ids');
+    $category_style_ids = syncmaster_get_selected_category_style_ids();
+    if (!empty($category_style_ids)) {
+        syncmaster_add_skus_to_monitored_products($category_style_ids);
+    }
+
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&products_tab=categories&categories_saved=1'));
+    exit;
+}
+
+function syncmaster_add_skus_to_monitored_products($skus) {
+    if (!is_array($skus) || empty($skus)) {
+        return;
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . SYNCMASTER_PRODUCTS_TABLE;
+
+    foreach ($skus as $sku) {
+        $sku = sanitize_text_field($sku);
+        if ($sku === '') {
+            continue;
+        }
+        $wpdb->replace(
+            $table,
+            array(
+                'sku' => $sku,
+                'created_at' => current_time('mysql'),
+            ),
+            array('%s', '%s')
+        );
+    }
 }
 
 function syncmaster_reschedule_cron() {
@@ -1075,27 +1403,156 @@ function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $co
     return $stats;
 }
 
-function syncmaster_set_product_category($product_id, $category_name) {
-    $category_name = is_string($category_name) ? trim($category_name) : '';
-    if ($category_name === '') {
-        return;
+function syncmaster_get_selected_category_style_ids() {
+    $style_map = syncmaster_get_selected_category_style_map();
+    if (empty($style_map)) {
+        return array();
     }
 
-    $raw_categories = preg_split('/\s*-\s*/', $category_name);
-    $categories = array();
-    foreach ($raw_categories as $category) {
-        $category = trim((string) $category);
-        if ($category !== '') {
-            $categories[] = $category;
+    return array_keys($style_map);
+}
+
+function syncmaster_get_selected_category_style_map() {
+    $cache_key = 'syncmaster_selected_category_style_ids';
+    $cached = get_transient($cache_key);
+    if (is_array($cached)) {
+        return $cached;
+    }
+
+    $rules = syncmaster_get_category_sync_rules();
+    $available_categories = syncmaster_fetch_ss_categories();
+    $name_to_id_map = array();
+    foreach ($available_categories as $category_row) {
+        if (!is_array($category_row)) {
+            continue;
+        }
+        $name = sanitize_text_field($category_row['name'] ?? '');
+        $id = sanitize_text_field($category_row['id'] ?? '');
+        if ($name !== '' && $id !== '') {
+            $name_to_id_map[$name] = $id;
+        }
+    }
+    $enabled_categories = array();
+    foreach ($rules as $source_id => $rule) {
+        if (!empty($rule['enabled'])) {
+            $normalized_source_id = sanitize_text_field($source_id);
+            if (isset($name_to_id_map[$normalized_source_id])) {
+                $normalized_source_id = $name_to_id_map[$normalized_source_id];
+            }
+            $enabled_categories[] = $normalized_source_id;
         }
     }
 
+    if (empty($enabled_categories)) {
+        return array();
+    }
+
+    $data = syncmaster_fetch_style_category_index();
+    if (empty($data)) {
+        return array();
+    }
+
+    $enabled_lookup = array_fill_keys($enabled_categories, true);
+    $style_map = array();
+    foreach ($data as $style) {
+        if (!is_array($style)) {
+            continue;
+        }
+        $style_id = sanitize_text_field($style['style_id'] ?? '');
+        $category_ids = isset($style['category_ids']) && is_array($style['category_ids']) ? $style['category_ids'] : array();
+        if ($style_id === '' || empty($category_ids)) {
+            continue;
+        }
+        foreach ($category_ids as $category_id) {
+            $category_id = sanitize_text_field($category_id);
+            if (isset($enabled_lookup[$category_id])) {
+                if (!isset($style_map[$style_id])) {
+                    $style_map[$style_id] = array();
+                }
+                $style_map[$style_id][] = $category_id;
+            }
+        }
+    }
+
+    foreach ($style_map as $style_id => $category_ids) {
+        $style_map[$style_id] = array_values(array_unique(array_filter(array_map('sanitize_text_field', $category_ids))));
+    }
+    set_transient($cache_key, $style_map, 15 * MINUTE_IN_SECONDS);
+
+    return $style_map;
+}
+
+function syncmaster_get_mapped_product_category_names($category_name, $category_ids = array()) {
+    $rules = syncmaster_get_category_sync_rules();
+    $categories = array();
+
+    if (is_array($category_ids) && !empty($category_ids)) {
+        foreach ($category_ids as $category_id) {
+            $category_id = sanitize_text_field($category_id);
+            if ($category_id === '') {
+                continue;
+            }
+            $rule = $rules[$category_id] ?? array();
+            if (!empty($rule['enabled']) && ($rule['mode'] ?? '') === 'existing' && !empty($rule['target_term_id'])) {
+                $term = get_term((int) $rule['target_term_id'], 'product_cat');
+                if ($term && !is_wp_error($term)) {
+                    $categories[] = $term->name;
+                    continue;
+                }
+            }
+            if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
+                $categories[] = sanitize_text_field($rule['new_name']);
+            }
+        }
+    }
+
+    $category_name = is_string($category_name) ? trim($category_name) : '';
+    if ($category_name === '') {
+        return array_values(array_unique(array_filter($categories)));
+    }
+
+    $raw_categories = preg_split('/\s*-\s*/', $category_name);
+    foreach ($raw_categories as $raw_category) {
+        $raw_category = sanitize_text_field($raw_category);
+        if ($raw_category === '') {
+            continue;
+        }
+
+        $rule = array();
+        foreach ($rules as $candidate_rule) {
+            $candidate_name = sanitize_text_field($candidate_rule['source_name'] ?? '');
+            if ($candidate_name === $raw_category) {
+                $rule = $candidate_rule;
+                break;
+            }
+        }
+        if (!empty($rule['enabled']) && ($rule['mode'] ?? '') === 'existing' && !empty($rule['target_term_id'])) {
+            $term = get_term((int) $rule['target_term_id'], 'product_cat');
+            if ($term && !is_wp_error($term)) {
+                $categories[] = $term->name;
+                continue;
+            }
+        }
+
+        if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
+            $categories[] = sanitize_text_field($rule['new_name']);
+            continue;
+        }
+
+            $categories[] = $raw_category;
+    }
+
+    return array_values(array_unique(array_filter($categories)));
+}
+
+function syncmaster_set_product_category($product_id, $category_name, $category_ids = array()) {
+    $categories = syncmaster_get_mapped_product_category_names($category_name, $category_ids);
     if (empty($categories)) {
         return;
     }
 
     $term_ids = array();
-    foreach (array_unique($categories) as $category) {
+    foreach ($categories as $category) {
         $term = term_exists($category, 'product_cat');
         if (!$term) {
             $term = wp_insert_term($category, 'product_cat');
@@ -1163,8 +1620,25 @@ function syncmaster_set_featured_image($product_id, $image_url) {
 }
 
 function syncmaster_sync_monitored_products() {
+    ignore_user_abort(true);
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(0);
+    }
+
     $monitored = syncmaster_get_monitored_products();
-    $monitored_count = count($monitored);
+    $monitored_skus = array();
+    foreach ($monitored as $row) {
+        $sku = sanitize_text_field($row['sku'] ?? '');
+        if ($sku !== '') {
+            $monitored_skus[] = $sku;
+        }
+    }
+    $selected_category_style_map = syncmaster_get_selected_category_style_map();
+    $category_skus = array_keys($selected_category_style_map);
+    $sync_queue = !empty($category_skus)
+        ? array_values(array_unique($category_skus))
+        : array_values(array_unique($monitored_skus));
+    $monitored_count = count($sync_queue);
     $color_selections = syncmaster_get_color_selections();
     $color_taxonomy = syncmaster_get_color_taxonomy();
     $size_taxonomy = syncmaster_get_size_taxonomy();
@@ -1185,8 +1659,7 @@ function syncmaster_sync_monitored_products() {
     $updated = 0;
     $fail = 0;
 
-    foreach ($monitored as $item) {
-        $sku = $item['sku'];
+    foreach ($sync_queue as $sku) {
         $api_item = syncmaster_fetch_ss_product($sku);
         if (empty($api_item)) {
             $fail++;
@@ -1320,9 +1793,8 @@ function syncmaster_sync_monitored_products() {
             syncmaster_assign_color_terms($saved_id, $color_term_ids, $color_taxonomy);
             syncmaster_assign_size_terms($saved_id, $size_term_ids, $size_taxonomy);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
-            if (!$product_id) {
-                syncmaster_set_product_category($saved_id, $mapped['category']);
-            }
+            $selected_category_ids_for_style = $selected_category_style_map[$sku] ?? array();
+            syncmaster_set_product_category($saved_id, $mapped['category'], $selected_category_ids_for_style);
             syncmaster_update_threaddesk_product_postbox($saved_id, $color_postbox_view_map);
             if ($mapped['image'] !== '') {
                 syncmaster_set_featured_image($saved_id, $mapped['image']);
@@ -1429,6 +1901,11 @@ function syncmaster_sync_monitored_products() {
         'monitored' => $monitored_count,
         'created' => $created,
         'updated' => $updated,
+        'queue_source_counts' => array(
+            'monitored_products' => count($monitored_skus),
+            'category_styles' => count($category_skus),
+            'active_queue_source' => !empty($category_skus) ? 'categories' : 'monitored_products',
+        ),
     );
 }
 
