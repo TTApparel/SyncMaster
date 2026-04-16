@@ -129,6 +129,23 @@
         });
     }
 
+    $(document).on('submit', '.syncmaster-sync-form', function (event) {
+        var progressBox = document.getElementById('syncmaster-sync-progress');
+        if (!progressBox || progressBox.classList.contains('is-active') === false) {
+            return;
+        }
+
+        var shouldReplace = window.confirm('A sync job is still running and incomplete. Do you want to stop it and start this new sync now?');
+        if (!shouldReplace) {
+            event.preventDefault();
+            return;
+        }
+
+        var $form = $(this);
+        $form.find('input[name="force_restart"]').remove();
+        $('<input type="hidden" name="force_restart" value="1">').appendTo($form);
+    });
+
     refreshSyncProgress();
     setInterval(refreshSyncProgress, 4000);
 })(jQuery);

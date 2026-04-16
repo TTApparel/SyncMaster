@@ -67,21 +67,21 @@ function syncmaster_render_shell($active = 'dashboard', $content = '') {
         <div class="syncmaster-header">
             <h1><?php echo esc_html__('SyncMaster', 'syncmaster'); ?></h1>
             <div class="syncmaster-sync-actions">
-                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" id="syncmaster-sync-selected-form">
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" id="syncmaster-sync-selected-form" class="syncmaster-sync-form">
                     <?php wp_nonce_field('syncmaster_sync_selected_products'); ?>
                     <input type="hidden" name="action" value="syncmaster_sync_selected_products">
                     <button type="submit" class="button button-primary syncmaster-sync-now">
                         <?php echo esc_html__('Sync Selected Products', 'syncmaster'); ?>
                     </button>
                 </form>
-                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="syncmaster-sync-form">
                     <?php wp_nonce_field('syncmaster_sync_inventory_variations'); ?>
                     <input type="hidden" name="action" value="syncmaster_sync_inventory_variations">
                     <button type="submit" class="button">
                         <?php echo esc_html__('ReSync Inventory/Variations', 'syncmaster'); ?>
                     </button>
                 </form>
-                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="syncmaster-sync-form">
                     <?php wp_nonce_field('syncmaster_sync_new_products'); ?>
                     <input type="hidden" name="action" value="syncmaster_sync_new_products">
                     <button type="submit" class="button">

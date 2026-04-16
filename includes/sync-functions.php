@@ -490,7 +490,8 @@ function syncmaster_handle_sync_now() {
 
     check_admin_referer('syncmaster_sync_now');
 
-    syncmaster_start_background_sync('manual', array('mode' => 'full'));
+    $force_restart = !empty($_POST['force_restart']);
+    syncmaster_start_background_sync('manual', array('mode' => 'full', 'force_restart' => $force_restart));
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
     exit;
@@ -502,6 +503,7 @@ function syncmaster_handle_sync_selected_products() {
     }
 
     check_admin_referer('syncmaster_sync_selected_products');
+    $force_restart = !empty($_POST['force_restart']);
     $posted_skus = $_POST['skus'] ?? array();
     $selected_skus = array();
     if (is_array($posted_skus)) {
@@ -517,6 +519,7 @@ function syncmaster_handle_sync_selected_products() {
         syncmaster_start_background_sync('manual_selected', array(
             'mode' => 'full',
             'explicit_queue' => $selected_skus,
+            'force_restart' => $force_restart,
         ));
     }
 
@@ -529,8 +532,12 @@ function syncmaster_handle_sync_inventory_variations() {
         wp_die(__('Unauthorized', 'syncmaster'));
     }
 
+    $force_restart = !empty($_POST['force_restart']);
     check_admin_referer('syncmaster_sync_inventory_variations');
-    syncmaster_start_background_sync('manual_inventory_variations', array('mode' => 'inventory_variations_only'));
+    syncmaster_start_background_sync('manual_inventory_variations', array(
+        'mode' => 'inventory_variations_only',
+        'force_restart' => $force_restart,
+    ));
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
     exit;
 }
@@ -540,8 +547,12 @@ function syncmaster_handle_sync_new_products() {
         wp_die(__('Unauthorized', 'syncmaster'));
     }
 
+    $force_restart = !empty($_POST['force_restart']);
     check_admin_referer('syncmaster_sync_new_products');
-    syncmaster_start_background_sync('manual_new_products', array('mode' => 'new_only'));
+    syncmaster_start_background_sync('manual_new_products', array(
+        'mode' => 'new_only',
+        'force_restart' => $force_restart,
+    ));
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
     exit;
 }
@@ -573,11 +584,20 @@ function syncmaster_run_sync_placeholder($source = 'unknown') {
 }
 
 function syncmaster_start_background_sync($source = 'unknown', $options = array()) {
-    if (get_option('syncmaster_active_sync_job')) {
-        syncmaster_write_log('info', __('Sync request ignored: a sync job is already running.', 'syncmaster'), 0, 0, array(
-            'source' => sanitize_text_field($source),
-        ));
-        return;
+    $force_restart = !empty($options['force_restart']);
+    $active_job = get_option('syncmaster_active_sync_job');
+    if ($active_job) {
+        if ($force_restart) {
+            delete_option('syncmaster_active_sync_job');
+            syncmaster_write_log('info', __('Active sync job was stopped and replaced by a new request.', 'syncmaster'), 0, 0, array(
+                'source' => sanitize_text_field($source),
+            ));
+        } else {
+            syncmaster_write_log('info', __('Sync request ignored: a sync job is already running.', 'syncmaster'), 0, 0, array(
+                'source' => sanitize_text_field($source),
+            ));
+            return;
+        }
     }
 
     $queue = syncmaster_get_current_sync_queue($options);
@@ -1645,6 +1665,10 @@ function syncmaster_get_selected_category_style_map() {
             $enabled_categories[] = $normalized_source_id;
         }
     }
+    set_transient($cache_key, $style_map, 15 * MINUTE_IN_SECONDS);
+
+    return $style_map;
+}
 
     if (empty($enabled_categories)) {
         return array();
@@ -1709,22 +1733,6 @@ function syncmaster_get_mapped_product_category_names($category_name, $category_
 
         if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
             $categories[] = sanitize_text_field($rule['new_name']);
-        }
-
-        $rule = array();
-        foreach ($rules as $candidate_rule) {
-            $candidate_name = sanitize_text_field($candidate_rule['source_name'] ?? '');
-            if ($candidate_name === $raw_category) {
-                $rule = $candidate_rule;
-                break;
-            }
-        }
-        if (!empty($rule['enabled']) && ($rule['mode'] ?? '') === 'existing' && !empty($rule['target_term_id'])) {
-            $term = get_term((int) $rule['target_term_id'], 'product_cat');
-            if ($term && !is_wp_error($term)) {
-                $categories[] = $term->name;
-                continue;
-            }
         }
 
         if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
@@ -2800,3 +2808,4 @@ function syncmaster_handle_test_api() {
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_settings&api_tested=1'));
     exit;
 }
+    $force_restart = !empty($_POST['force_restart']);
