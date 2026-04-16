@@ -133,7 +133,7 @@ function syncmaster_get_category_sync_rules() {
 }
 
 function syncmaster_fetch_ss_categories() {
-    $cache_key = 'syncmaster_ss_categories_v1';
+    $cache_key = 'syncmaster_ss_categories_v2';
     $cached = get_transient($cache_key);
     if (is_array($cached)) {
         return $cached;
@@ -192,7 +192,12 @@ function syncmaster_extract_style_category_ids($style_row) {
         if (is_array($parts)) {
             $ids = $parts;
         }
+    } elseif (is_numeric($raw_categories)) {
+        $ids[] = (string) $raw_categories;
     } elseif (is_array($raw_categories)) {
+        if (isset($raw_categories['string'])) {
+            $raw_categories = $raw_categories['string'];
+        }
         foreach ($raw_categories as $value) {
             $ids[] = syncmaster_extract_scalar($value);
         }
@@ -211,8 +216,33 @@ function syncmaster_extract_style_category_ids($style_row) {
     return array_values(array_unique($normalized));
 }
 
+function syncmaster_normalize_style_category_rows($decoded_payload) {
+    if (!is_array($decoded_payload)) {
+        return array();
+    }
+
+    if (isset($decoded_payload['Style'])) {
+        $decoded_payload = $decoded_payload['Style'];
+    } elseif (isset($decoded_payload['ArrayOfStyle']['Style'])) {
+        $decoded_payload = $decoded_payload['ArrayOfStyle']['Style'];
+    }
+
+    if (!isset($decoded_payload[0])) {
+        $decoded_payload = array($decoded_payload);
+    }
+
+    $rows = array();
+    foreach ($decoded_payload as $row) {
+        if (is_array($row)) {
+            $rows[] = $row;
+        }
+    }
+
+    return $rows;
+}
+
 function syncmaster_fetch_style_category_index() {
-    $cache_key = 'syncmaster_style_category_index_v1';
+    $cache_key = 'syncmaster_style_category_index_v2';
     $cached = get_transient($cache_key);
     if (is_array($cached)) {
         return $cached;
@@ -223,11 +253,12 @@ function syncmaster_fetch_style_category_index() {
     $page = 1;
     $page_size = 500;
     $max_pages = 200;
+    $last_page_signature = '';
 
     while ($page <= $max_pages) {
         $endpoint = add_query_arg(
             array(
-                'fields' => 'styleID,categories',
+                'fields' => 'categories,styleID',
                 'page' => $page,
                 'pageSize' => $page_size,
             ),
@@ -242,8 +273,10 @@ function syncmaster_fetch_style_category_index() {
             break;
         }
 
-        $chunk = json_decode(wp_remote_retrieve_body($response), true);
-        if (!is_array($chunk) || empty($chunk)) {
+        $body = wp_remote_retrieve_body($response);
+        $decoded = syncmaster_parse_api_response($body);
+        $chunk = syncmaster_normalize_style_category_rows($decoded);
+        if (empty($chunk)) {
             break;
         }
 
@@ -261,6 +294,15 @@ function syncmaster_fetch_style_category_index() {
                 'category_ids' => $category_ids,
             );
         }
+
+        $first_style = isset($chunk[0]) && is_array($chunk[0]) ? syncmaster_extract_scalar($chunk[0]['styleID'] ?? ($chunk[0]['StyleID'] ?? '')) : '';
+        $last_row = end($chunk);
+        $last_style = is_array($last_row) ? syncmaster_extract_scalar($last_row['styleID'] ?? ($last_row['StyleID'] ?? '')) : '';
+        $current_signature = md5((string) $first_style . '|' . (string) $last_style . '|' . count($chunk));
+        if ($page > 1 && $current_signature === $last_page_signature) {
+            break;
+        }
+        $last_page_signature = $current_signature;
 
         if (count($chunk) < $page_size) {
             break;
