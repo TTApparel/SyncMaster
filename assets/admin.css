@@ -303,6 +303,29 @@
     margin-bottom: 10px;
 }
 
+.syncmaster-monitored-group-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.syncmaster-group-remove-form {
+    display: inline-flex;
+    margin: 0;
+}
+
+.syncmaster-bulk-remove-form {
+    margin-bottom: 12px;
+}
+
+.syncmaster-item-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #334155;
+}
+
 .syncmaster-muted {
     display: block;
     color: #64748b;

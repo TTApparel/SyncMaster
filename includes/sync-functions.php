@@ -2125,6 +2125,38 @@ function syncmaster_handle_remove_sku() {
     exit;
 }
 
+function syncmaster_handle_bulk_remove_skus() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_bulk_remove_skus');
+
+    $posted_skus = $_POST['skus'] ?? array();
+    if (!is_array($posted_skus) || empty($posted_skus)) {
+        wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&removed=0'));
+        exit;
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . SYNCMASTER_PRODUCTS_TABLE;
+    $removed_count = 0;
+
+    foreach ($posted_skus as $sku_value) {
+        $sku = sanitize_text_field(wp_unslash($sku_value));
+        if ($sku === '') {
+            continue;
+        }
+        $deleted = $wpdb->delete($table, array('sku' => $sku), array('%s'));
+        if ($deleted) {
+            $removed_count += (int) $deleted;
+        }
+    }
+
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&removed=' . $removed_count));
+    exit;
+}
+
 function syncmaster_handle_save_colors() {
     if (!current_user_can('manage_options')) {
         wp_die(__('Unauthorized', 'syncmaster'));

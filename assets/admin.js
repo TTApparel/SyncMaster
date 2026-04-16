@@ -34,4 +34,27 @@
             }
         });
     });
+
+    $(document).on('change', '.syncmaster-group-toggle', function () {
+        var target = $(this).data('target');
+        if (!target) {
+            return;
+        }
+        $('#' + target + ' .syncmaster-bulk-sku').prop('checked', $(this).is(':checked'));
+    });
+
+    $(document).on('submit', '#syncmaster-bulk-remove-form', function (event) {
+        var $form = $(this);
+        $form.find('input[name="skus[]"]').remove();
+        var selected = $('.syncmaster-bulk-sku:checked');
+        if (!selected.length) {
+            event.preventDefault();
+            window.alert('Please select at least one monitored product to remove.');
+            return;
+        }
+        selected.each(function () {
+            var sku = $(this).val();
+            $('<input type="hidden" name="skus[]">').val(sku).appendTo($form);
+        });
+    });
 })(jQuery);

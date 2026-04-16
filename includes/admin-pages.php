@@ -182,6 +182,11 @@ function syncmaster_render_products() {
             <p><?php echo esc_html__('Category sync rules updated.', 'syncmaster'); ?></p>
         </div>
     <?php endif; ?>
+    <?php if (isset($_GET['removed']) && (int) $_GET['removed'] > 0) : ?>
+        <div class="notice notice-success is-dismissible">
+            <p><?php echo esc_html(sprintf(__('Removed %d monitored products.', 'syncmaster'), (int) $_GET['removed'])); ?></p>
+        </div>
+    <?php endif; ?>
 
     <h2 class="nav-tab-wrapper syncmaster-products-tabs">
         <a href="<?php echo esc_url(add_query_arg(array('page' => 'syncmaster_products', 'products_tab' => 'products'), admin_url('admin.php'))); ?>" class="nav-tab <?php echo $active_tab === 'products' ? 'nav-tab-active' : ''; ?>">
@@ -329,6 +334,11 @@ function syncmaster_render_products() {
             <?php if (empty($monitored)) : ?>
                 <p><?php echo esc_html__('No products monitored yet.', 'syncmaster'); ?></p>
             <?php else : ?>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="syncmaster-bulk-remove-form" id="syncmaster-bulk-remove-form">
+                    <?php wp_nonce_field('syncmaster_bulk_remove_skus'); ?>
+                    <input type="hidden" name="action" value="syncmaster_bulk_remove_skus">
+                    <button type="submit" class="button button-secondary"><?php echo esc_html__('Remove Checked Products', 'syncmaster'); ?></button>
+                </form>
                 <?php
                 $grouped_monitored = array();
                 foreach ($monitored as $item) {
@@ -353,12 +363,27 @@ function syncmaster_render_products() {
                 ksort($grouped_monitored, SORT_NATURAL | SORT_FLAG_CASE);
                 ?>
                 <?php foreach ($grouped_monitored as $group_name => $group_items) : ?>
+                    <?php $group_id = 'syncmaster-group-' . md5($group_name); ?>
                     <details class="syncmaster-monitored-group" open>
                         <summary>
-                            <strong><?php echo esc_html($group_name); ?></strong>
-                            <span class="syncmaster-muted"><?php echo esc_html(sprintf(__('Products: %d', 'syncmaster'), count($group_items))); ?></span>
+                            <span class="syncmaster-monitored-group-title">
+                                <label>
+                                    <input type="checkbox" class="syncmaster-group-toggle" data-target="<?php echo esc_attr($group_id); ?>">
+                                    <?php echo esc_html__('Select Group', 'syncmaster'); ?>
+                                </label>
+                                <strong><?php echo esc_html($group_name); ?></strong>
+                                <span class="syncmaster-muted"><?php echo esc_html(sprintf(__('Products: %d', 'syncmaster'), count($group_items))); ?></span>
+                            </span>
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="syncmaster-group-remove-form">
+                                <?php wp_nonce_field('syncmaster_bulk_remove_skus'); ?>
+                                <input type="hidden" name="action" value="syncmaster_bulk_remove_skus">
+                                <?php foreach ($group_items as $group_item_hidden) : ?>
+                                    <input type="hidden" name="skus[]" value="<?php echo esc_attr($group_item_hidden['item']['sku'] ?? ''); ?>">
+                                <?php endforeach; ?>
+                                <button type="submit" class="button button-link-delete syncmaster-remove"><?php echo esc_html__('Remove Group', 'syncmaster'); ?></button>
+                            </form>
                         </summary>
-                        <ul class="syncmaster-monitored">
+                        <ul class="syncmaster-monitored" id="<?php echo esc_attr($group_id); ?>">
                             <?php foreach ($group_items as $group_item) : ?>
                                 <?php $item = $group_item['item']; ?>
                                 <?php $style = $group_item['style']; ?>
@@ -370,6 +395,10 @@ function syncmaster_render_products() {
                                 <li class="syncmaster-monitored-item">
                                     <div class="syncmaster-monitored-header">
                                         <div class="syncmaster-monitored-info">
+                                            <label class="syncmaster-item-toggle">
+                                                <input type="checkbox" class="syncmaster-bulk-sku" value="<?php echo esc_attr($item['sku']); ?>">
+                                                <?php echo esc_html__('Select', 'syncmaster'); ?>
+                                            </label>
                                             <strong><?php echo esc_html($style['title']); ?></strong>
                                             <span class="syncmaster-muted">
                                                 <?php echo esc_html(sprintf(__('BaseCategory: %s', 'syncmaster'), $style['baseCategory'])); ?>
