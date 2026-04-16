@@ -1938,7 +1938,8 @@ function syncmaster_get_current_sync_queue($options = array()) {
         : array();
     $selected_category_style_map = syncmaster_get_selected_category_style_map();
     $category_skus = array_keys($selected_category_style_map);
-    if (!empty($explicit_queue)) {
+    $has_explicit_queue = !empty($explicit_queue);
+    if ($has_explicit_queue) {
         $sync_queue = $explicit_queue;
     } else {
         $sync_queue = !empty($category_skus)
@@ -1946,8 +1947,10 @@ function syncmaster_get_current_sync_queue($options = array()) {
             : array_values(array_unique($monitored_skus));
     }
 
-    $mode = sanitize_text_field($options['mode'] ?? 'full');
-    $sync_queue = syncmaster_filter_sync_queue_for_mode($sync_queue, $mode);
+    if (!$has_explicit_queue) {
+        $mode = sanitize_text_field($options['mode'] ?? 'full');
+        $sync_queue = syncmaster_filter_sync_queue_for_mode($sync_queue, $mode);
+    }
 
     return array(
         'sync_queue' => $sync_queue,
