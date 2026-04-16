@@ -114,6 +114,30 @@
     gap: 10px;
 }
 
+.syncmaster-products-tabs {
+    margin-bottom: 14px;
+}
+
+.syncmaster-category-sync-form {
+    margin-top: 12px;
+}
+
+.syncmaster-category-actions {
+    display: flex;
+    gap: 8px;
+    margin: 0 0 12px;
+}
+
+.syncmaster-category-table th,
+.syncmaster-category-table td {
+    vertical-align: middle;
+}
+
+.syncmaster-category-table input[type="text"],
+.syncmaster-category-table select {
+    width: 100%;
+}
+
 .syncmaster-search input[type="search"] {
     flex: 1;
     padding: 8px 12px;
@@ -257,6 +281,61 @@
     border-radius: 12px;
     padding: 12px 16px;
     margin-bottom: 10px;
+}
+
+.syncmaster-monitored-group {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+}
+
+.syncmaster-monitored-group > summary {
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.syncmaster-monitored-group[open] > summary {
+    margin-bottom: 10px;
+}
+
+.syncmaster-monitored-group-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.syncmaster-group-remove-form {
+    display: inline-flex;
+    margin: 0;
+}
+
+.syncmaster-bulk-remove-form {
+    margin-bottom: 12px;
+}
+
+.syncmaster-item-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #334155;
+}
+
+.syncmaster-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 10px 0 14px;
+}
+
+.syncmaster-pagination-links {
+    display: inline-flex;
+    gap: 8px;
 }
 
 .syncmaster-muted {

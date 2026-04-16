@@ -15,6 +15,7 @@ define('SYNCMASTER_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('SYNCMASTER_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('SYNCMASTER_API_URL', 'https://api-ca.ssactivewear.com/v2/products/');
 define('SYNCMASTER_STYLES_API_URL', 'https://api-ca.ssactivewear.com/v2/styles');
+define('SYNCMASTER_CATEGORIES_API_URL', 'https://api-ca.ssactivewear.com/v2/categories/');
 
 define('SYNCMASTER_PRODUCTS_TABLE', 'syncmaster_products');
 define('SYNCMASTER_LOGS_TABLE', 'syncmaster_logs');
@@ -54,11 +55,14 @@ add_action('admin_post_syncmaster_sync_now', 'syncmaster_handle_sync_now');
 add_action('admin_post_syncmaster_save_settings', 'syncmaster_handle_save_settings');
 add_action('admin_post_syncmaster_add_sku', 'syncmaster_handle_add_sku');
 add_action('admin_post_syncmaster_remove_sku', 'syncmaster_handle_remove_sku');
+add_action('admin_post_syncmaster_bulk_remove_skus', 'syncmaster_handle_bulk_remove_skus');
 add_action('admin_post_syncmaster_test_api', 'syncmaster_handle_test_api');
 add_action('admin_post_syncmaster_save_colors', 'syncmaster_handle_save_colors');
 add_action('admin_post_syncmaster_save_margin', 'syncmaster_handle_save_margin');
+add_action('admin_post_syncmaster_save_categories', 'syncmaster_handle_save_categories');
 
 add_action('syncmaster_cron_sync', 'syncmaster_run_scheduled_sync');
+add_action('syncmaster_process_sync_batch', 'syncmaster_process_sync_batch');
 add_action('init', 'syncmaster_ensure_cron_configuration');
 add_action('init', 'syncmaster_maybe_run_interval_sync', 20);
 add_action('wp_enqueue_scripts', 'syncmaster_enqueue_frontend_assets');
