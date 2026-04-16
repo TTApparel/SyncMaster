@@ -875,8 +875,14 @@ function syncmaster_get_size_taxonomy() {
 }
 
 function syncmaster_build_color_term_slug($color) {
+    $compact_slug_part = static function ($value) {
+        $value = sanitize_text_field((string) $value);
+        $value = preg_replace('/\s+/', '', $value);
+        return sanitize_title($value);
+    };
+
     if (is_string($color)) {
-        return sanitize_title($color);
+        return $compact_slug_part($color);
     }
 
     if (!is_array($color)) {
@@ -897,7 +903,7 @@ function syncmaster_build_color_term_slug($color) {
 
     $slug_parts = array();
     foreach ($parts as $part) {
-        $slug = sanitize_title($part);
+        $slug = $compact_slug_part($part);
         if ($slug !== '') {
             $slug_parts[] = $slug;
         }
@@ -1002,7 +1008,7 @@ function syncmaster_collect_color_term_data($colors, $selected_colors = array())
 
         $slug = syncmaster_build_color_term_slug($color);
         if ($slug === '') {
-            $slug = sanitize_title($name);
+            $slug = syncmaster_build_color_term_slug($name);
         }
         $data[$name] = array(
             'name' => $name,
@@ -1018,7 +1024,7 @@ function syncmaster_collect_color_term_data($colors, $selected_colors = array())
             }
             $data[$name] = array(
                 'name' => $name,
-                'slug' => sanitize_title($name),
+                'slug' => syncmaster_build_color_term_slug($name),
             );
         }
     }
@@ -1695,6 +1701,20 @@ function syncmaster_get_selected_category_style_map() {
             }
         }
     }
+    $enabled_categories = array();
+    foreach ($rules as $source_id => $rule) {
+        if (!empty($rule['enabled'])) {
+            $normalized_source_id = sanitize_text_field($source_id);
+            if (isset($name_to_id_map[$normalized_source_id])) {
+                $normalized_source_id = $name_to_id_map[$normalized_source_id];
+            }
+            $enabled_categories[] = $normalized_source_id;
+        }
+    }
+    set_transient($cache_key, $style_map, 15 * MINUTE_IN_SECONDS);
+
+    return $style_map;
+}
 
     foreach ($style_map as $style_id => $category_ids) {
         $style_map[$style_id] = array_values(array_unique(array_filter(array_map('sanitize_text_field', $category_ids))));
@@ -1730,6 +1750,25 @@ function syncmaster_get_mapped_product_category_names($category_name, $category_
         if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
             $categories[] = sanitize_text_field($rule['new_name']);
         }
+        $rule = $rules[$category_id] ?? array();
+        if (!empty($rule['enabled']) && ($rule['mode'] ?? '') === 'existing' && !empty($rule['target_term_id'])) {
+            $term = get_term((int) $rule['target_term_id'], 'product_cat');
+            if ($term && !is_wp_error($term)) {
+                $categories[] = $term->name;
+                continue;
+            }
+        }
+
+        if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
+            $categories[] = sanitize_text_field($rule['new_name']);
+        }
+
+        if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
+            $categories[] = sanitize_text_field($rule['new_name']);
+            continue;
+        }
+
+            $categories[] = $raw_category;
     }
 
     return array_values(array_unique(array_filter($categories)));
