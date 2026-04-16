@@ -420,19 +420,10 @@ function syncmaster_render_products() {
                     $product = $product_id ? wc_get_product($product_id) : null;
                     $item_title = ($product && method_exists($product, 'get_name')) ? $product->get_name() : $sku;
 
-                    $mapped_names = array();
-                    if ($product_id) {
-                        $terms = wp_get_post_terms($product_id, 'product_cat', array('fields' => 'names'));
-                        if (!is_wp_error($terms) && is_array($terms)) {
-                            $mapped_names = array_values(array_filter(array_map('sanitize_text_field', $terms)));
-                        }
-                    }
-                    if (empty($mapped_names)) {
-                        $mapped_names = syncmaster_get_mapped_product_category_names(
-                            '',
-                            $selected_category_style_map[$sku] ?? array()
-                        );
-                    }
+                    $mapped_names = syncmaster_get_mapped_product_category_names(
+                        '',
+                        $selected_category_style_map[$sku] ?? array()
+                    );
                     $primary_group = !empty($mapped_names) ? (string) reset($mapped_names) : __('Unmapped Categories', 'syncmaster');
                     if (!isset($grouped_monitored[$primary_group])) {
                         $grouped_monitored[$primary_group] = array();

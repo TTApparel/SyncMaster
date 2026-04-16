@@ -1689,36 +1689,26 @@ function syncmaster_get_mapped_product_category_names($category_name, $category_
     $rules = syncmaster_get_category_sync_rules();
     $categories = array();
 
-    if (is_array($category_ids) && !empty($category_ids)) {
-        foreach ($category_ids as $category_id) {
-            $category_id = sanitize_text_field($category_id);
-            if ($category_id === '') {
+    if (!is_array($category_ids) || empty($category_ids)) {
+        return array();
+    }
+
+    foreach ($category_ids as $category_id) {
+        $category_id = sanitize_text_field($category_id);
+        if ($category_id === '') {
+            continue;
+        }
+        $rule = $rules[$category_id] ?? array();
+        if (!empty($rule['enabled']) && ($rule['mode'] ?? '') === 'existing' && !empty($rule['target_term_id'])) {
+            $term = get_term((int) $rule['target_term_id'], 'product_cat');
+            if ($term && !is_wp_error($term)) {
+                $categories[] = $term->name;
                 continue;
             }
-            $rule = $rules[$category_id] ?? array();
-            if (!empty($rule['enabled']) && ($rule['mode'] ?? '') === 'existing' && !empty($rule['target_term_id'])) {
-                $term = get_term((int) $rule['target_term_id'], 'product_cat');
-                if ($term && !is_wp_error($term)) {
-                    $categories[] = $term->name;
-                    continue;
-                }
-            }
-            if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
-                $categories[] = sanitize_text_field($rule['new_name']);
-            }
         }
-    }
 
-    $category_name = is_string($category_name) ? trim($category_name) : '';
-    if ($category_name === '') {
-        return array_values(array_unique(array_filter($categories)));
-    }
-
-    $raw_categories = preg_split('/\s*-\s*/', $category_name);
-    foreach ($raw_categories as $raw_category) {
-        $raw_category = sanitize_text_field($raw_category);
-        if ($raw_category === '') {
-            continue;
+        if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
+            $categories[] = sanitize_text_field($rule['new_name']);
         }
 
         $rule = array();
