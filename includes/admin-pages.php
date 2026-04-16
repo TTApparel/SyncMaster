@@ -416,7 +416,9 @@ function syncmaster_render_products() {
                     if ($sku === '') {
                         continue;
                     }
-                    $product_id = function_exists('wc_get_product_id_by_sku') ? (int) wc_get_product_id_by_sku($sku) : 0;
+                    $product_id = function_exists('syncmaster_get_product_id_by_api_sku')
+                        ? (int) syncmaster_get_product_id_by_api_sku($sku)
+                        : (function_exists('wc_get_product_id_by_sku') ? (int) wc_get_product_id_by_sku($sku) : 0);
                     $product = $product_id ? wc_get_product($product_id) : null;
                     $item_title = ($product && method_exists($product, 'get_name')) ? $product->get_name() : $sku;
 

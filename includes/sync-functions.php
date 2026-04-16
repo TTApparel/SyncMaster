@@ -1845,6 +1845,59 @@ function syncmaster_set_product_type_term($product_id, $is_variable) {
     );
 }
 
+function syncmaster_get_product_id_by_api_sku($api_sku) {
+    $api_sku = sanitize_text_field($api_sku);
+    if ($api_sku === '') {
+        return 0;
+    }
+
+    if (function_exists('wc_get_product_id_by_sku')) {
+        $product_id = (int) wc_get_product_id_by_sku($api_sku);
+        if ($product_id > 0) {
+            return $product_id;
+        }
+    }
+
+    $matched_ids = get_posts(array(
+        'post_type' => array('product', 'product_variation'),
+        'post_status' => array('publish', 'private', 'draft', 'pending', 'future'),
+        'fields' => 'ids',
+        'posts_per_page' => 1,
+        'meta_key' => '_global_unique_id',
+        'meta_value' => $api_sku,
+    ));
+    if (empty($matched_ids)) {
+        return 0;
+    }
+
+    $matched_id = (int) $matched_ids[0];
+    if ($matched_id <= 0) {
+        return 0;
+    }
+
+    if (get_post_type($matched_id) === 'product_variation') {
+        return (int) wp_get_post_parent_id($matched_id);
+    }
+
+    return $matched_id;
+}
+
+function syncmaster_set_product_global_identifier($product_or_id, $api_sku) {
+    $api_sku = sanitize_text_field($api_sku);
+    if ($api_sku === '') {
+        return;
+    }
+
+    if (is_object($product_or_id) && method_exists($product_or_id, 'set_global_unique_id')) {
+        $product_or_id->set_global_unique_id($api_sku);
+    }
+
+    $product_id = is_numeric($product_or_id) ? (int) $product_or_id : 0;
+    if ($product_id > 0) {
+        update_post_meta($product_id, '_global_unique_id', $api_sku);
+    }
+}
+
 function syncmaster_set_featured_image($product_id, $image_url) {
     $image_url = syncmaster_normalize_ss_image_url($image_url);
     if ($image_url === '') {
@@ -1979,7 +2032,7 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
         }
         $mapped = syncmaster_map_product_data($api_item);
         $desired_sku = $mapped['sku'] !== '' ? $mapped['sku'] : $sku;
-        $product_id_by_monitored_sku = wc_get_product_id_by_sku($sku);
+        $product_id_by_monitored_sku = syncmaster_get_product_id_by_api_sku($sku);
         $product_id_by_desired_sku = $desired_sku !== '' ? wc_get_product_id_by_sku($desired_sku) : 0;
         $product_id = $product_id_by_monitored_sku;
         $product_match_source = $product_id ? 'monitored_sku' : 'new_product';
@@ -2057,6 +2110,7 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
         }
 
         $product->set_name($mapped['name'] !== '' ? $mapped['name'] : sprintf(__('Synced SKU %s', 'syncmaster'), $sku));
+        syncmaster_set_product_global_identifier($product, $sku);
         $existing_id = wc_get_product_id_by_sku($desired_sku);
         if ($existing_id && $existing_id !== $product_id) {
             $fail++;
@@ -2102,6 +2156,7 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
         );
 
         if ($saved_id) {
+            syncmaster_set_product_global_identifier($saved_id, $sku);
             syncmaster_assign_color_terms($saved_id, $color_term_ids, $color_taxonomy);
             syncmaster_assign_size_terms($saved_id, $size_term_ids, $size_taxonomy);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
