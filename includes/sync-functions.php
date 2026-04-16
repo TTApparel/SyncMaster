@@ -490,16 +490,14 @@ function syncmaster_handle_sync_now() {
 
     check_admin_referer('syncmaster_sync_now');
 
-    syncmaster_write_log('info', __('Manual sync triggered.', 'syncmaster'), 0, 0, array('source' => 'manual'));
-    syncmaster_run_sync_placeholder('manual');
+    syncmaster_start_background_sync('manual');
 
-    wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&synced=1'));
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
     exit;
 }
 
 function syncmaster_run_scheduled_sync() {
-    syncmaster_write_log('info', __('Scheduled sync triggered.', 'syncmaster'), 0, 0, array('source' => 'cron'));
-    syncmaster_run_sync_placeholder('cron');
+    syncmaster_start_background_sync('cron');
 }
 
 function syncmaster_run_sync_placeholder($source = 'unknown') {
@@ -520,6 +518,96 @@ function syncmaster_run_sync_placeholder($source = 'unknown') {
             'monitored' => $results['monitored'],
             'created' => $results['created'],
             'updated' => $results['updated'],
+        )
+    );
+}
+
+function syncmaster_start_background_sync($source = 'unknown') {
+    if (get_option('syncmaster_active_sync_job')) {
+        syncmaster_write_log('info', __('Sync request ignored: a sync job is already running.', 'syncmaster'), 0, 0, array(
+            'source' => sanitize_text_field($source),
+        ));
+        return;
+    }
+
+    $queue = syncmaster_get_current_sync_queue();
+    $total = isset($queue['sync_queue']) && is_array($queue['sync_queue']) ? count($queue['sync_queue']) : 0;
+    if ($total === 0) {
+        syncmaster_write_log('info', __('Sync skipped: no products in the current queue.', 'syncmaster'), 0, 0, array(
+            'source' => sanitize_text_field($source),
+        ));
+        return;
+    }
+
+    update_option('syncmaster_active_sync_job', array(
+        'source' => sanitize_text_field($source),
+        'started_at' => time(),
+        'offset' => 0,
+        'total' => $total,
+        'success' => 0,
+        'fail' => 0,
+        'created' => 0,
+        'updated' => 0,
+    ), false);
+
+    syncmaster_write_log('info', __('Background sync queued.', 'syncmaster'), 0, 0, array(
+        'source' => sanitize_text_field($source),
+        'queue_total' => $total,
+    ));
+
+    if (!wp_next_scheduled('syncmaster_process_sync_batch')) {
+        wp_schedule_single_event(time() + 1, 'syncmaster_process_sync_batch');
+    }
+}
+
+function syncmaster_process_sync_batch() {
+    $job = get_option('syncmaster_active_sync_job', array());
+    if (!is_array($job) || empty($job)) {
+        return;
+    }
+
+    $offset = isset($job['offset']) ? (int) $job['offset'] : 0;
+    $total = isset($job['total']) ? (int) $job['total'] : 0;
+    $batch_size = 20;
+
+    if ($offset >= $total) {
+        delete_option('syncmaster_active_sync_job');
+        return;
+    }
+
+    $results = syncmaster_sync_monitored_products($batch_size, $offset);
+    $processed = (int) ($results['processed'] ?? 0);
+    if ($processed <= 0) {
+        $processed = $batch_size;
+    }
+
+    $job['offset'] = min($offset + $processed, $total);
+    $job['success'] = (int) ($job['success'] ?? 0) + (int) ($results['success'] ?? 0);
+    $job['fail'] = (int) ($job['fail'] ?? 0) + (int) ($results['fail'] ?? 0);
+    $job['created'] = (int) ($job['created'] ?? 0) + (int) ($results['created'] ?? 0);
+    $job['updated'] = (int) ($job['updated'] ?? 0) + (int) ($results['updated'] ?? 0);
+    update_option('syncmaster_active_sync_job', $job, false);
+
+    if ($job['offset'] < $total) {
+        wp_schedule_single_event(time() + 2, 'syncmaster_process_sync_batch');
+        return;
+    }
+
+    delete_option('syncmaster_active_sync_job');
+    $started_at = isset($job['started_at']) ? (int) $job['started_at'] : time();
+    update_option('syncmaster_last_sync_run_ts', $started_at);
+    update_option('syncmaster_last_sync_status', $job['fail'] > 0 ? 'error' : 'success');
+    syncmaster_write_log(
+        $job['fail'] > 0 ? 'error' : 'success',
+        $job['fail'] > 0 ? __('Background sync completed with errors.', 'syncmaster') : __('Background sync completed.', 'syncmaster'),
+        (int) $job['success'],
+        (int) $job['fail'],
+        array(
+            'source' => sanitize_text_field($job['source'] ?? 'unknown'),
+            'started_at' => gmdate('c', $started_at),
+            'queue_total' => $total,
+            'created' => (int) $job['created'],
+            'updated' => (int) $job['updated'],
         )
     );
 }
@@ -1639,7 +1727,7 @@ function syncmaster_set_featured_image($product_id, $image_url) {
     }
 }
 
-function syncmaster_sync_monitored_products() {
+function syncmaster_get_current_sync_queue() {
     ignore_user_abort(true);
     if (function_exists('set_time_limit')) {
         @set_time_limit(0);
@@ -1658,6 +1746,24 @@ function syncmaster_sync_monitored_products() {
     $sync_queue = !empty($category_skus)
         ? array_values(array_unique($category_skus))
         : array_values(array_unique($monitored_skus));
+    return array(
+        'sync_queue' => $sync_queue,
+        'selected_category_style_map' => $selected_category_style_map,
+        'monitored_skus' => $monitored_skus,
+        'category_skus' => $category_skus,
+    );
+}
+
+function syncmaster_sync_monitored_products($limit = 0, $offset = 0) {
+    $queue_data = syncmaster_get_current_sync_queue();
+    $sync_queue = $queue_data['sync_queue'];
+    $selected_category_style_map = $queue_data['selected_category_style_map'];
+    $monitored_skus = $queue_data['monitored_skus'];
+    $category_skus = $queue_data['category_skus'];
+
+    if ($limit > 0) {
+        $sync_queue = array_slice($sync_queue, max(0, (int) $offset), (int) $limit);
+    }
     $monitored_count = count($sync_queue);
     $color_selections = syncmaster_get_color_selections();
     $color_taxonomy = syncmaster_get_color_taxonomy();
@@ -1921,6 +2027,7 @@ function syncmaster_sync_monitored_products() {
         'monitored' => $monitored_count,
         'created' => $created,
         'updated' => $updated,
+        'processed' => $monitored_count,
         'queue_source_counts' => array(
             'monitored_products' => count($monitored_skus),
             'category_styles' => count($category_skus),

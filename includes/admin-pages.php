@@ -76,6 +76,11 @@ function syncmaster_render_shell($active = 'dashboard', $content = '') {
                 <p><?php echo esc_html__('Sync completed. Check the Sync Logs for details.', 'syncmaster'); ?></p>
             </div>
         <?php endif; ?>
+        <?php if (!empty($_GET['sync_queued'])) : ?>
+            <div class="notice notice-info is-dismissible">
+                <p><?php echo esc_html__('Sync queued in background. Refresh Sync Logs for progress.', 'syncmaster'); ?></p>
+            </div>
+        <?php endif; ?>
         <div class="syncmaster-layout">
             <aside class="syncmaster-sidebar">
                 <nav>
