@@ -119,7 +119,7 @@
             }
             if (text) {
                 if (data.active) {
-                    text.textContent = 'Sync Progress: ' + (data.percent || 0) + '% (' + (data.offset || 0) + '/' + (data.total || 0) + ') · Success: ' + (data.success || 0) + ' · Fail: ' + (data.fail || 0);
+                    text.textContent = 'Sync Success: ' + (data.percent || 0) + '% (' + (data.success || 0) + '/' + (data.total || 0) + ' successful) · Processed: ' + (data.processed || 0) + '/' + (data.total || 0) + ' · Fail: ' + (data.fail || 0);
                     progressBox.classList.add('is-active');
                 } else {
                     text.textContent = 'No active sync job.';
