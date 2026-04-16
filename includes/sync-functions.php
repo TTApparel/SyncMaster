@@ -2521,6 +2521,83 @@ function syncmaster_get_style_colors($style_title) {
     return $colors;
 }
 
+function syncmaster_render_colors_panel_markup($sku, $colors) {
+    $sku = sanitize_text_field($sku);
+    $selections = syncmaster_get_color_selections();
+    $has_color_selection = array_key_exists($sku, $selections);
+    $selected_colors = $selections[$sku] ?? array();
+
+    ob_start();
+    if (empty($colors)) :
+        ?>
+        <p class="syncmaster-muted"><?php echo esc_html__('No color data found.', 'syncmaster'); ?></p>
+        <?php
+    else :
+        ?>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('syncmaster_save_colors'); ?>
+            <input type="hidden" name="action" value="syncmaster_save_colors">
+            <input type="hidden" name="sku" value="<?php echo esc_attr($sku); ?>">
+            <div class="syncmaster-color-grid">
+                <?php foreach ($colors as $color) : ?>
+                    <?php
+                    $color_name = $color['colorName'] ?? '';
+                    $image_url = $color['colorFrontImage'] ?? '';
+                    if ($image_url !== '' && strpos($image_url, 'http') !== 0) {
+                        $image_url = 'https://cdn.ssactivewear.com/' . ltrim($image_url, '/');
+                    }
+                    $is_checked = !$has_color_selection || in_array($color_name, $selected_colors, true);
+                    ?>
+                    <label class="syncmaster-color-card">
+                        <span class="syncmaster-color-toggle">
+                            <input type="checkbox" name="syncmaster_colors[]" value="<?php echo esc_attr($color_name); ?>" <?php checked($is_checked); ?>>
+                            <?php echo esc_html__('Include', 'syncmaster'); ?>
+                        </span>
+                        <?php if ($image_url) : ?>
+                            <img src="<?php echo esc_url($image_url); ?>" alt="<?php echo esc_attr($color_name); ?>">
+                        <?php endif; ?>
+                        <div>
+                            <strong><?php echo esc_html($color_name); ?></strong>
+                            <span class="syncmaster-muted"><?php echo esc_html($color['colorCode']); ?></span>
+                            <?php
+                            $size_names = $color['sizeNames'] ?? array();
+                            if (!empty($size_names)) :
+                                $size_list = implode(', ', array_map('sanitize_text_field', $size_names));
+                                ?>
+                                <span class="syncmaster-muted"><?php echo esc_html($size_list); ?></span>
+                            <?php endif; ?>
+                        </div>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+            <button type="submit" class="button syncmaster-save-colors">
+                <?php echo esc_html__('Save Color Preferences', 'syncmaster'); ?>
+            </button>
+        </form>
+        <?php
+    endif;
+
+    return ob_get_clean();
+}
+
+function syncmaster_handle_load_colors_panel() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('message' => __('Unauthorized', 'syncmaster')), 403);
+    }
+
+    check_ajax_referer('syncmaster_load_colors_panel', 'nonce');
+
+    $sku = sanitize_text_field(wp_unslash($_POST['sku'] ?? ''));
+    if ($sku === '') {
+        wp_send_json_error(array('message' => __('Missing SKU.', 'syncmaster')), 400);
+    }
+
+    $style = syncmaster_get_style_summary($sku);
+    $colors = syncmaster_get_style_colors($style['title'] ?? $sku);
+    $html = syncmaster_render_colors_panel_markup($sku, $colors);
+    wp_send_json_success(array('html' => $html));
+}
+
 function syncmaster_ss_search($query) {
     $query = strtolower($query);
     $endpoint = add_query_arg(

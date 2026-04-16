@@ -60,6 +60,7 @@ add_action('admin_post_syncmaster_test_api', 'syncmaster_handle_test_api');
 add_action('admin_post_syncmaster_save_colors', 'syncmaster_handle_save_colors');
 add_action('admin_post_syncmaster_save_margin', 'syncmaster_handle_save_margin');
 add_action('admin_post_syncmaster_save_categories', 'syncmaster_handle_save_categories');
+add_action('wp_ajax_syncmaster_load_colors_panel', 'syncmaster_handle_load_colors_panel');
 
 add_action('syncmaster_cron_sync', 'syncmaster_run_scheduled_sync');
 add_action('syncmaster_process_sync_batch', 'syncmaster_process_sync_batch');
@@ -153,6 +154,15 @@ function syncmaster_enqueue_admin_assets($hook) {
         array('jquery'),
         SYNCMASTER_VERSION,
         true
+    );
+
+    wp_localize_script(
+        'syncmaster-admin',
+        'syncmasterAdmin',
+        array(
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+            'colorsNonce' => wp_create_nonce('syncmaster_load_colors_panel'),
+        )
     );
 }
 
