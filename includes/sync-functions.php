@@ -619,9 +619,7 @@ function syncmaster_start_background_sync($source = 'unknown', $options = array(
         'created' => 0,
         'updated' => 0,
         'mode' => sanitize_text_field($options['mode'] ?? 'full'),
-        'explicit_queue' => isset($options['explicit_queue']) && is_array($options['explicit_queue'])
-            ? array_values(array_unique(array_map('sanitize_text_field', $options['explicit_queue'])))
-            : array(),
+        'explicit_queue' => array_values($queue['sync_queue']),
     ), false);
 
     syncmaster_write_log('info', __('Background sync queued.', 'syncmaster'), 0, 0, array(
@@ -647,7 +645,7 @@ function syncmaster_process_sync_batch() {
 
     $offset = isset($job['offset']) ? (int) $job['offset'] : 0;
     $total = isset($job['total']) ? (int) $job['total'] : 0;
-    $batch_size = 20;
+    $batch_size = 1;
 
     if ($offset >= $total) {
         delete_option('syncmaster_active_sync_job');
@@ -701,6 +699,7 @@ function syncmaster_get_sync_progress_status() {
             'active' => false,
             'offset' => 0,
             'total' => 0,
+            'processed' => 0,
             'percent' => 0,
             'success' => 0,
             'fail' => 0,
@@ -710,15 +709,19 @@ function syncmaster_get_sync_progress_status() {
 
     $offset = max(0, (int) ($job['offset'] ?? 0));
     $total = max(0, (int) ($job['total'] ?? 0));
-    $percent = $total > 0 ? min(100, (int) floor(($offset / $total) * 100)) : 0;
+    $success = max(0, (int) ($job['success'] ?? 0));
+    $fail = max(0, (int) ($job['fail'] ?? 0));
+    $processed = min($total, $success + $fail);
+    $percent = $total > 0 ? min(100, (int) floor(($success / $total) * 100)) : 0;
 
     return array(
         'active' => true,
         'offset' => $offset,
         'total' => $total,
+        'processed' => $processed,
         'percent' => $percent,
-        'success' => (int) ($job['success'] ?? 0),
-        'fail' => (int) ($job['fail'] ?? 0),
+        'success' => $success,
+        'fail' => $fail,
         'mode' => sanitize_text_field($job['mode'] ?? 'full'),
     );
 }
@@ -734,6 +737,11 @@ function syncmaster_handle_sync_progress() {
 
 function syncmaster_maybe_run_interval_sync() {
     if (wp_doing_cron() || wp_doing_ajax()) {
+        return;
+    }
+
+    $active_job = get_option('syncmaster_active_sync_job', array());
+    if (is_array($active_job) && !empty($active_job)) {
         return;
     }
 
@@ -759,7 +767,7 @@ function syncmaster_maybe_run_interval_sync() {
         'last_run' => $last_run,
         'interval_seconds' => $interval_seconds,
     ));
-    syncmaster_run_sync_placeholder('interval_fallback');
+    syncmaster_start_background_sync('interval_fallback', array('mode' => 'full'));
     delete_transient($lock_key);
 }
 
@@ -1884,12 +1892,44 @@ function syncmaster_get_current_sync_queue($options = array()) {
             ? array_values(array_unique($category_skus))
             : array_values(array_unique($monitored_skus));
     }
+
+    $mode = sanitize_text_field($options['mode'] ?? 'full');
+    $sync_queue = syncmaster_filter_sync_queue_for_mode($sync_queue, $mode);
+
     return array(
         'sync_queue' => $sync_queue,
         'selected_category_style_map' => $selected_category_style_map,
         'monitored_skus' => $monitored_skus,
         'category_skus' => $category_skus,
     );
+}
+
+function syncmaster_filter_sync_queue_for_mode($sync_queue, $mode = 'full') {
+    if (!is_array($sync_queue) || empty($sync_queue)) {
+        return array();
+    }
+
+    $mode = sanitize_text_field($mode);
+    $normalized_queue = array_values(array_unique(array_filter(array_map('sanitize_text_field', $sync_queue))));
+    if ($mode === 'full') {
+        return $normalized_queue;
+    }
+
+    if (!function_exists('wc_get_product_id_by_sku')) {
+        return $normalized_queue;
+    }
+
+    $filtered_queue = array();
+    foreach ($normalized_queue as $sku) {
+        $existing_product_id = (int) wc_get_product_id_by_sku($sku);
+        if ($mode === 'new_only' && $existing_product_id <= 0) {
+            $filtered_queue[] = $sku;
+        } elseif ($mode === 'inventory_variations_only' && $existing_product_id > 0) {
+            $filtered_queue[] = $sku;
+        }
+    }
+
+    return $filtered_queue;
 }
 
 function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = array()) {
