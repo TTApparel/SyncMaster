@@ -710,7 +710,17 @@ function syncmaster_get_sync_progress_status() {
 
     $offset = max(0, (int) ($job['offset'] ?? 0));
     $total = max(0, (int) ($job['total'] ?? 0));
-    $percent = $total > 0 ? min(100, (int) floor(($offset / $total) * 100)) : 0;
+    $percent = 0;
+    if ($total > 0) {
+        if ($offset >= $total) {
+            $percent = 100;
+        } elseif ($offset <= 0) {
+            // A batch can run for a while before offset increments; keep the UI visibly active.
+            $percent = 1;
+        } else {
+            $percent = min(99, max(1, (int) round(($offset / $total) * 100)));
+        }
+    }
 
     return array(
         'active' => true,
