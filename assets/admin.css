@@ -152,6 +152,14 @@
     gap: 10px;
 }
 
+.syncmaster-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
 .syncmaster-products-tabs {
     margin-bottom: 14px;
 }
