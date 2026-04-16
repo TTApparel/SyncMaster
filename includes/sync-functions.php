@@ -400,6 +400,17 @@ function syncmaster_handle_save_categories() {
     check_admin_referer('syncmaster_save_categories');
 
     $posted_rows = $_POST['syncmaster_categories'] ?? array();
+    $categories_lookup_by_name = array();
+    foreach (syncmaster_fetch_ss_categories() as $category_row) {
+        if (!is_array($category_row)) {
+            continue;
+        }
+        $lookup_name = sanitize_text_field($category_row['name'] ?? '');
+        $lookup_id = sanitize_text_field($category_row['id'] ?? '');
+        if ($lookup_name !== '' && $lookup_id !== '') {
+            $categories_lookup_by_name[$lookup_name] = $lookup_id;
+        }
+    }
     $rules = array();
     if (is_array($posted_rows)) {
         foreach ($posted_rows as $row) {
@@ -409,6 +420,9 @@ function syncmaster_handle_save_categories() {
 
             $source_name = sanitize_text_field(wp_unslash($row['source_name'] ?? ''));
             $source_id = sanitize_text_field(wp_unslash($row['source_id'] ?? ''));
+            if ($source_id === '' && $source_name !== '' && isset($categories_lookup_by_name[$source_name])) {
+                $source_id = $categories_lookup_by_name[$source_name];
+            }
             if ($source_name === '' || $source_id === '') {
                 continue;
             }
