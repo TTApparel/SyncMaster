@@ -850,8 +850,14 @@ function syncmaster_get_size_taxonomy() {
 }
 
 function syncmaster_build_color_term_slug($color) {
+    $compact_slug_part = static function ($value) {
+        $value = sanitize_text_field((string) $value);
+        $value = preg_replace('/\s+/', '', $value);
+        return sanitize_title($value);
+    };
+
     if (is_string($color)) {
-        return sanitize_title($color);
+        return $compact_slug_part($color);
     }
 
     if (!is_array($color)) {
@@ -872,7 +878,7 @@ function syncmaster_build_color_term_slug($color) {
 
     $slug_parts = array();
     foreach ($parts as $part) {
-        $slug = sanitize_title($part);
+        $slug = $compact_slug_part($part);
         if ($slug !== '') {
             $slug_parts[] = $slug;
         }
@@ -977,7 +983,7 @@ function syncmaster_collect_color_term_data($colors, $selected_colors = array())
 
         $slug = syncmaster_build_color_term_slug($color);
         if ($slug === '') {
-            $slug = sanitize_title($name);
+            $slug = syncmaster_build_color_term_slug($name);
         }
         $data[$name] = array(
             'name' => $name,
@@ -993,7 +999,7 @@ function syncmaster_collect_color_term_data($colors, $selected_colors = array())
             }
             $data[$name] = array(
                 'name' => $name,
-                'slug' => sanitize_title($name),
+                'slug' => syncmaster_build_color_term_slug($name),
             );
         }
     }
@@ -1704,6 +1710,29 @@ function syncmaster_get_mapped_product_category_names($category_name, $category_
         if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
             $categories[] = sanitize_text_field($rule['new_name']);
         }
+
+        $rule = array();
+        foreach ($rules as $candidate_rule) {
+            $candidate_name = sanitize_text_field($candidate_rule['source_name'] ?? '');
+            if ($candidate_name === $raw_category) {
+                $rule = $candidate_rule;
+                break;
+            }
+        }
+        if (!empty($rule['enabled']) && ($rule['mode'] ?? '') === 'existing' && !empty($rule['target_term_id'])) {
+            $term = get_term((int) $rule['target_term_id'], 'product_cat');
+            if ($term && !is_wp_error($term)) {
+                $categories[] = $term->name;
+                continue;
+            }
+        }
+
+        if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
+            $categories[] = sanitize_text_field($rule['new_name']);
+            continue;
+        }
+
+            $categories[] = $raw_category;
     }
 
     return array_values(array_unique(array_filter($categories)));
