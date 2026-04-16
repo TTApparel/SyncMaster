@@ -157,7 +157,15 @@ function syncmaster_render_products() {
         $search_results = syncmaster_ss_search($query);
     }
 
-    $monitored = syncmaster_get_monitored_products();
+    $monitored_page = isset($_GET['monitored_page']) ? max(1, (int) $_GET['monitored_page']) : 1;
+    $monitored_per_page = 40;
+    $monitored_total = syncmaster_get_products_count();
+    $monitored_total_pages = max(1, (int) ceil($monitored_total / $monitored_per_page));
+    if ($monitored_page > $monitored_total_pages) {
+        $monitored_page = $monitored_total_pages;
+    }
+    $monitored_offset = ($monitored_page - 1) * $monitored_per_page;
+    $monitored = syncmaster_get_monitored_products($monitored_per_page, $monitored_offset);
     $color_selections = syncmaster_get_color_selections();
     $margin_settings = syncmaster_get_margin_settings();
     $selected_category_style_map = syncmaster_get_selected_category_style_map();
@@ -344,6 +352,25 @@ function syncmaster_render_products() {
                     <input type="hidden" name="action" value="syncmaster_bulk_remove_skus">
                     <button type="submit" class="button button-secondary"><?php echo esc_html__('Remove Checked Products', 'syncmaster'); ?></button>
                 </form>
+                <?php if ($monitored_total_pages > 1) : ?>
+                    <div class="syncmaster-pagination">
+                        <span class="syncmaster-muted">
+                            <?php echo esc_html(sprintf(__('Page %1$d of %2$d', 'syncmaster'), $monitored_page, $monitored_total_pages)); ?>
+                        </span>
+                        <div class="syncmaster-pagination-links">
+                            <?php if ($monitored_page > 1) : ?>
+                                <a class="button" href="<?php echo esc_url(add_query_arg(array('page' => 'syncmaster_products', 'products_tab' => 'products', 'monitored_page' => $monitored_page - 1), admin_url('admin.php'))); ?>">
+                                    <?php echo esc_html__('Previous', 'syncmaster'); ?>
+                                </a>
+                            <?php endif; ?>
+                            <?php if ($monitored_page < $monitored_total_pages) : ?>
+                                <a class="button" href="<?php echo esc_url(add_query_arg(array('page' => 'syncmaster_products', 'products_tab' => 'products', 'monitored_page' => $monitored_page + 1), admin_url('admin.php'))); ?>">
+                                    <?php echo esc_html__('Next', 'syncmaster'); ?>
+                                </a>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                <?php endif; ?>
                 <?php
                 $grouped_monitored = array();
                 foreach ($monitored as $item) {
@@ -493,6 +520,13 @@ function syncmaster_render_products() {
                         </ul>
                     </details>
                 <?php endforeach; ?>
+                <?php if ($monitored_total_pages > 1) : ?>
+                    <div class="syncmaster-pagination">
+                        <span class="syncmaster-muted">
+                            <?php echo esc_html(sprintf(__('Page %1$d of %2$d', 'syncmaster'), $monitored_page, $monitored_total_pages)); ?>
+                        </span>
+                    </div>
+                <?php endif; ?>
             <?php endif; ?>
         </section>
     <?php endif; ?>

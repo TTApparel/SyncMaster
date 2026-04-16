@@ -2180,10 +2180,16 @@ function syncmaster_get_last_sync_status() {
     return ucfirst($logs[0]['level']);
 }
 
-function syncmaster_get_monitored_products() {
+function syncmaster_get_monitored_products($limit = 0, $offset = 0) {
     global $wpdb;
     $table = $wpdb->prefix . SYNCMASTER_PRODUCTS_TABLE;
-    return $wpdb->get_results("SELECT sku FROM {$table} ORDER BY created_at DESC", ARRAY_A);
+    $sql = "SELECT sku FROM {$table} ORDER BY created_at DESC";
+    $limit = (int) $limit;
+    $offset = max(0, (int) $offset);
+    if ($limit > 0) {
+        $sql = $wpdb->prepare("SELECT sku FROM {$table} ORDER BY created_at DESC LIMIT %d OFFSET %d", $limit, $offset);
+    }
+    return $wpdb->get_results($sql, ARRAY_A);
 }
 
 function syncmaster_get_products_count() {

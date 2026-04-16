@@ -326,6 +326,18 @@
     color: #334155;
 }
 
+.syncmaster-pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 10px 0 14px;
+}
+
+.syncmaster-pagination-links {
+    display: inline-flex;
+    gap: 8px;
+}
+
 .syncmaster-muted {
     display: block;
     color: #64748b;
