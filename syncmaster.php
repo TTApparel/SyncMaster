@@ -52,6 +52,9 @@ function syncmaster_deactivate() {
 add_action('admin_menu', 'syncmaster_register_admin_menu');
 add_action('admin_enqueue_scripts', 'syncmaster_enqueue_admin_assets');
 add_action('admin_post_syncmaster_sync_now', 'syncmaster_handle_sync_now');
+add_action('admin_post_syncmaster_sync_selected_products', 'syncmaster_handle_sync_selected_products');
+add_action('admin_post_syncmaster_sync_inventory_variations', 'syncmaster_handle_sync_inventory_variations');
+add_action('admin_post_syncmaster_sync_new_products', 'syncmaster_handle_sync_new_products');
 add_action('admin_post_syncmaster_save_settings', 'syncmaster_handle_save_settings');
 add_action('admin_post_syncmaster_add_sku', 'syncmaster_handle_add_sku');
 add_action('admin_post_syncmaster_remove_sku', 'syncmaster_handle_remove_sku');

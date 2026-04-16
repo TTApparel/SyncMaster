@@ -490,14 +490,64 @@ function syncmaster_handle_sync_now() {
 
     check_admin_referer('syncmaster_sync_now');
 
-    syncmaster_start_background_sync('manual');
+    syncmaster_start_background_sync('manual', array('mode' => 'full'));
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
     exit;
 }
 
+function syncmaster_handle_sync_selected_products() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_sync_selected_products');
+    $posted_skus = $_POST['skus'] ?? array();
+    $selected_skus = array();
+    if (is_array($posted_skus)) {
+        foreach ($posted_skus as $sku_value) {
+            $sku = sanitize_text_field(wp_unslash($sku_value));
+            if ($sku !== '') {
+                $selected_skus[] = $sku;
+            }
+        }
+    }
+    $selected_skus = array_values(array_unique($selected_skus));
+    if (!empty($selected_skus)) {
+        syncmaster_start_background_sync('manual_selected', array(
+            'mode' => 'full',
+            'explicit_queue' => $selected_skus,
+        ));
+    }
+
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
+    exit;
+}
+
+function syncmaster_handle_sync_inventory_variations() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_sync_inventory_variations');
+    syncmaster_start_background_sync('manual_inventory_variations', array('mode' => 'inventory_variations_only'));
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
+    exit;
+}
+
+function syncmaster_handle_sync_new_products() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_sync_new_products');
+    syncmaster_start_background_sync('manual_new_products', array('mode' => 'new_only'));
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
+    exit;
+}
+
 function syncmaster_run_scheduled_sync() {
-    syncmaster_start_background_sync('cron');
+    syncmaster_start_background_sync('cron', array('mode' => 'full'));
 }
 
 function syncmaster_run_sync_placeholder($source = 'unknown') {
@@ -522,7 +572,7 @@ function syncmaster_run_sync_placeholder($source = 'unknown') {
     );
 }
 
-function syncmaster_start_background_sync($source = 'unknown') {
+function syncmaster_start_background_sync($source = 'unknown', $options = array()) {
     if (get_option('syncmaster_active_sync_job')) {
         syncmaster_write_log('info', __('Sync request ignored: a sync job is already running.', 'syncmaster'), 0, 0, array(
             'source' => sanitize_text_field($source),
@@ -530,7 +580,7 @@ function syncmaster_start_background_sync($source = 'unknown') {
         return;
     }
 
-    $queue = syncmaster_get_current_sync_queue();
+    $queue = syncmaster_get_current_sync_queue($options);
     $total = isset($queue['sync_queue']) && is_array($queue['sync_queue']) ? count($queue['sync_queue']) : 0;
     if ($total === 0) {
         syncmaster_write_log('info', __('Sync skipped: no products in the current queue.', 'syncmaster'), 0, 0, array(
@@ -548,6 +598,10 @@ function syncmaster_start_background_sync($source = 'unknown') {
         'fail' => 0,
         'created' => 0,
         'updated' => 0,
+        'mode' => sanitize_text_field($options['mode'] ?? 'full'),
+        'explicit_queue' => isset($options['explicit_queue']) && is_array($options['explicit_queue'])
+            ? array_values(array_unique(array_map('sanitize_text_field', $options['explicit_queue'])))
+            : array(),
     ), false);
 
     syncmaster_write_log('info', __('Background sync queued.', 'syncmaster'), 0, 0, array(
@@ -575,7 +629,10 @@ function syncmaster_process_sync_batch() {
         return;
     }
 
-    $results = syncmaster_sync_monitored_products($batch_size, $offset);
+    $results = syncmaster_sync_monitored_products($batch_size, $offset, array(
+        'mode' => sanitize_text_field($job['mode'] ?? 'full'),
+        'explicit_queue' => isset($job['explicit_queue']) && is_array($job['explicit_queue']) ? $job['explicit_queue'] : array(),
+    ));
     $processed = (int) ($results['processed'] ?? 0);
     if ($processed <= 0) {
         $processed = $batch_size;
@@ -1727,7 +1784,7 @@ function syncmaster_set_featured_image($product_id, $image_url) {
     }
 }
 
-function syncmaster_get_current_sync_queue() {
+function syncmaster_get_current_sync_queue($options = array()) {
     ignore_user_abort(true);
     if (function_exists('set_time_limit')) {
         @set_time_limit(0);
@@ -1741,11 +1798,18 @@ function syncmaster_get_current_sync_queue() {
             $monitored_skus[] = $sku;
         }
     }
+    $explicit_queue = isset($options['explicit_queue']) && is_array($options['explicit_queue'])
+        ? array_values(array_unique(array_map('sanitize_text_field', $options['explicit_queue'])))
+        : array();
     $selected_category_style_map = syncmaster_get_selected_category_style_map();
     $category_skus = array_keys($selected_category_style_map);
-    $sync_queue = !empty($category_skus)
-        ? array_values(array_unique($category_skus))
-        : array_values(array_unique($monitored_skus));
+    if (!empty($explicit_queue)) {
+        $sync_queue = $explicit_queue;
+    } else {
+        $sync_queue = !empty($category_skus)
+            ? array_values(array_unique($category_skus))
+            : array_values(array_unique($monitored_skus));
+    }
     return array(
         'sync_queue' => $sync_queue,
         'selected_category_style_map' => $selected_category_style_map,
@@ -1754,8 +1818,9 @@ function syncmaster_get_current_sync_queue() {
     );
 }
 
-function syncmaster_sync_monitored_products($limit = 0, $offset = 0) {
-    $queue_data = syncmaster_get_current_sync_queue();
+function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = array()) {
+    $mode = sanitize_text_field($options['mode'] ?? 'full');
+    $queue_data = syncmaster_get_current_sync_queue($options);
     $sync_queue = $queue_data['sync_queue'];
     $selected_category_style_map = $queue_data['selected_category_style_map'];
     $monitored_skus = $queue_data['monitored_skus'];
@@ -1808,6 +1873,13 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0) {
         if (!$product_id && $product_id_by_desired_sku) {
             $product_id = $product_id_by_desired_sku;
             $product_match_source = 'desired_sku';
+        }
+
+        if ($mode === 'new_only' && $product_id) {
+            continue;
+        }
+        if ($mode === 'inventory_variations_only' && !$product_id) {
+            continue;
         }
 
         if ($product_id_by_monitored_sku && $product_id_by_desired_sku && $product_id_by_monitored_sku !== $product_id_by_desired_sku) {

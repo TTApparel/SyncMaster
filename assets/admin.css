@@ -7,6 +7,7 @@
     align-items: center;
     justify-content: space-between;
     margin-bottom: 24px;
+    gap: 12px;
 }
 
 .syncmaster-header h1 {
@@ -16,6 +17,14 @@
 
 .syncmaster-sync-now {
     padding: 6px 16px;
+}
+
+.syncmaster-sync-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
 .syncmaster-layout {

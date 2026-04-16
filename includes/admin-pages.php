@@ -63,13 +63,29 @@ function syncmaster_render_shell($active = 'dashboard', $content = '') {
     <div class="wrap syncmaster-admin">
         <div class="syncmaster-header">
             <h1><?php echo esc_html__('SyncMaster', 'syncmaster'); ?></h1>
-            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                <?php wp_nonce_field('syncmaster_sync_now'); ?>
-                <input type="hidden" name="action" value="syncmaster_sync_now">
-                <button type="submit" class="button button-primary syncmaster-sync-now">
-                    <?php echo esc_html__('Sync Now', 'syncmaster'); ?>
-                </button>
-            </form>
+            <div class="syncmaster-sync-actions">
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" id="syncmaster-sync-selected-form">
+                    <?php wp_nonce_field('syncmaster_sync_selected_products'); ?>
+                    <input type="hidden" name="action" value="syncmaster_sync_selected_products">
+                    <button type="submit" class="button button-primary syncmaster-sync-now">
+                        <?php echo esc_html__('Sync Selected Products', 'syncmaster'); ?>
+                    </button>
+                </form>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                    <?php wp_nonce_field('syncmaster_sync_inventory_variations'); ?>
+                    <input type="hidden" name="action" value="syncmaster_sync_inventory_variations">
+                    <button type="submit" class="button">
+                        <?php echo esc_html__('ReSync Inventory/Variations', 'syncmaster'); ?>
+                    </button>
+                </form>
+                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                    <?php wp_nonce_field('syncmaster_sync_new_products'); ?>
+                    <input type="hidden" name="action" value="syncmaster_sync_new_products">
+                    <button type="submit" class="button">
+                        <?php echo esc_html__('Sync New Products', 'syncmaster'); ?>
+                    </button>
+                </form>
+            </div>
         </div>
         <?php if (!empty($_GET['synced'])) : ?>
             <div class="notice notice-success is-dismissible">
