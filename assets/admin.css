@@ -283,6 +283,26 @@
     margin-bottom: 10px;
 }
 
+.syncmaster-monitored-group {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+}
+
+.syncmaster-monitored-group > summary {
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.syncmaster-monitored-group[open] > summary {
+    margin-bottom: 10px;
+}
+
 .syncmaster-muted {
     display: block;
     color: #64748b;

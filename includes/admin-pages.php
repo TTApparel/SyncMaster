@@ -155,6 +155,7 @@ function syncmaster_render_products() {
     $monitored = syncmaster_get_monitored_products();
     $color_selections = syncmaster_get_color_selections();
     $margin_settings = syncmaster_get_margin_settings();
+    $selected_category_style_map = syncmaster_get_selected_category_style_map();
     $category_index = syncmaster_fetch_ss_categories();
     $category_sync_rules = syncmaster_get_category_sync_rules();
     $woo_categories = get_terms(array(
@@ -328,97 +329,129 @@ function syncmaster_render_products() {
             <?php if (empty($monitored)) : ?>
                 <p><?php echo esc_html__('No products monitored yet.', 'syncmaster'); ?></p>
             <?php else : ?>
-                <ul class="syncmaster-monitored">
-                    <?php foreach ($monitored as $item) : ?>
-                        <?php $style = syncmaster_get_style_summary($item['sku']); ?>
-                        <?php $colors = syncmaster_get_style_colors($style['title']); ?>
-                        <?php $has_color_selection = array_key_exists($item['sku'], $color_selections); ?>
-                        <?php $selected_colors = $color_selections[$item['sku']] ?? array(); ?>
-                        <?php $margin_percent = syncmaster_get_margin_percent_for_sku($item['sku'], 50); ?>
-                        <?php $panel_id = 'syncmaster-colors-' . esc_attr($item['sku']); ?>
-                        <li class="syncmaster-monitored-item">
-                            <div class="syncmaster-monitored-header">
-                                <div class="syncmaster-monitored-info">
-                                    <strong><?php echo esc_html($style['title']); ?></strong>
-                                    <span class="syncmaster-muted">
-                                        <?php echo esc_html(sprintf(__('BaseCategory: %s', 'syncmaster'), $style['baseCategory'])); ?>
-                                    </span>
-                                    <button class="button-link syncmaster-toggle-colors" type="button" data-target="<?php echo esc_attr($panel_id); ?>">
-                                        <?php echo esc_html__('View Colors', 'syncmaster'); ?>
-                                    </button>
-                                </div>
-                                <div class="syncmaster-monitored-actions">
-                                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                                        <?php wp_nonce_field('syncmaster_remove_sku'); ?>
-                                        <input type="hidden" name="action" value="syncmaster_remove_sku">
-                                        <input type="hidden" name="sku" value="<?php echo esc_attr($item['sku']); ?>">
-                                        <button type="submit" class="button button-link-delete syncmaster-remove">
-                                            <?php echo esc_html__('Remove', 'syncmaster'); ?>
-                                        </button>
-                                    </form>
-                                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="syncmaster-margin-form">
-                                        <?php wp_nonce_field('syncmaster_save_margin'); ?>
-                                        <input type="hidden" name="action" value="syncmaster_save_margin">
-                                        <input type="hidden" name="sku" value="<?php echo esc_attr($item['sku']); ?>">
-                                        <label>
-                                            <span class="syncmaster-muted"><?php echo esc_html__('Margin %', 'syncmaster'); ?></span>
-                                            <input type="number" name="margin_percent" min="0.01" step="0.01" value="<?php echo esc_attr($margin_percent); ?>">
-                                        </label>
-                                        <button type="submit" class="button">
-                                            <?php echo esc_html__('Save Margin', 'syncmaster'); ?>
-                                        </button>
-                                    </form>
-                                </div>
-                            </div>
-                            <div class="syncmaster-color-panel" id="<?php echo esc_attr($panel_id); ?>">
-                                <?php if (empty($colors)) : ?>
-                                    <p class="syncmaster-muted"><?php echo esc_html__('No color data found.', 'syncmaster'); ?></p>
-                                <?php else : ?>
-                                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                                        <?php wp_nonce_field('syncmaster_save_colors'); ?>
-                                        <input type="hidden" name="action" value="syncmaster_save_colors">
-                                        <input type="hidden" name="sku" value="<?php echo esc_attr($item['sku']); ?>">
-                                        <div class="syncmaster-color-grid">
-                                            <?php foreach ($colors as $color) : ?>
-                                                <?php
-                                                $color_name = $color['colorName'] ?? '';
-                                                $image_url = $color['colorFrontImage'] ?? '';
-                                                if ($image_url !== '' && strpos($image_url, 'http') !== 0) {
-                                                    $image_url = 'https://cdn.ssactivewear.com/' . ltrim($image_url, '/');
-                                                }
-                                                $is_checked = !$has_color_selection || in_array($color_name, $selected_colors, true);
-                                                ?>
-                                                <label class="syncmaster-color-card">
-                                                    <span class="syncmaster-color-toggle">
-                                                        <input type="checkbox" name="syncmaster_colors[]" value="<?php echo esc_attr($color_name); ?>" <?php checked($is_checked); ?>>
-                                                        <?php echo esc_html__('Include', 'syncmaster'); ?>
-                                                    </span>
-                                                    <?php if ($image_url) : ?>
-                                                        <img src="<?php echo esc_url($image_url); ?>" alt="<?php echo esc_attr($color_name); ?>">
-                                                    <?php endif; ?>
-                                                    <div>
-                                                        <strong><?php echo esc_html($color_name); ?></strong>
-                                                        <span class="syncmaster-muted"><?php echo esc_html($color['colorCode']); ?></span>
-                                                        <?php
-                                                        $size_names = $color['sizeNames'] ?? array();
-                                                        if (!empty($size_names)) :
-                                                            $size_list = implode(', ', array_map('sanitize_text_field', $size_names));
-                                                            ?>
-                                                            <span class="syncmaster-muted"><?php echo esc_html($size_list); ?></span>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                </label>
-                                            <?php endforeach; ?>
+                <?php
+                $grouped_monitored = array();
+                foreach ($monitored as $item) {
+                    $sku = sanitize_text_field($item['sku'] ?? '');
+                    if ($sku === '') {
+                        continue;
+                    }
+                    $style = syncmaster_get_style_summary($sku);
+                    $mapped_names = syncmaster_get_mapped_product_category_names(
+                        $style['baseCategory'] ?? '',
+                        $selected_category_style_map[$sku] ?? array()
+                    );
+                    $primary_group = !empty($mapped_names) ? (string) reset($mapped_names) : __('Unmapped Categories', 'syncmaster');
+                    if (!isset($grouped_monitored[$primary_group])) {
+                        $grouped_monitored[$primary_group] = array();
+                    }
+                    $grouped_monitored[$primary_group][] = array(
+                        'item' => $item,
+                        'style' => $style,
+                    );
+                }
+                ksort($grouped_monitored, SORT_NATURAL | SORT_FLAG_CASE);
+                ?>
+                <?php foreach ($grouped_monitored as $group_name => $group_items) : ?>
+                    <details class="syncmaster-monitored-group" open>
+                        <summary>
+                            <strong><?php echo esc_html($group_name); ?></strong>
+                            <span class="syncmaster-muted"><?php echo esc_html(sprintf(__('Products: %d', 'syncmaster'), count($group_items))); ?></span>
+                        </summary>
+                        <ul class="syncmaster-monitored">
+                            <?php foreach ($group_items as $group_item) : ?>
+                                <?php $item = $group_item['item']; ?>
+                                <?php $style = $group_item['style']; ?>
+                                <?php $colors = syncmaster_get_style_colors($style['title']); ?>
+                                <?php $has_color_selection = array_key_exists($item['sku'], $color_selections); ?>
+                                <?php $selected_colors = $color_selections[$item['sku']] ?? array(); ?>
+                                <?php $margin_percent = syncmaster_get_margin_percent_for_sku($item['sku'], 50); ?>
+                                <?php $panel_id = 'syncmaster-colors-' . esc_attr($item['sku']); ?>
+                                <li class="syncmaster-monitored-item">
+                                    <div class="syncmaster-monitored-header">
+                                        <div class="syncmaster-monitored-info">
+                                            <strong><?php echo esc_html($style['title']); ?></strong>
+                                            <span class="syncmaster-muted">
+                                                <?php echo esc_html(sprintf(__('BaseCategory: %s', 'syncmaster'), $style['baseCategory'])); ?>
+                                            </span>
+                                            <button class="button-link syncmaster-toggle-colors" type="button" data-target="<?php echo esc_attr($panel_id); ?>">
+                                                <?php echo esc_html__('View Colors', 'syncmaster'); ?>
+                                            </button>
                                         </div>
-                                        <button type="submit" class="button syncmaster-save-colors">
-                                            <?php echo esc_html__('Save Color Preferences', 'syncmaster'); ?>
-                                        </button>
-                                    </form>
-                                <?php endif; ?>
-                            </div>
-                        </li>
-                    <?php endforeach; ?>
-                </ul>
+                                        <div class="syncmaster-monitored-actions">
+                                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                                                <?php wp_nonce_field('syncmaster_remove_sku'); ?>
+                                                <input type="hidden" name="action" value="syncmaster_remove_sku">
+                                                <input type="hidden" name="sku" value="<?php echo esc_attr($item['sku']); ?>">
+                                                <button type="submit" class="button button-link-delete syncmaster-remove">
+                                                    <?php echo esc_html__('Remove', 'syncmaster'); ?>
+                                                </button>
+                                            </form>
+                                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="syncmaster-margin-form">
+                                                <?php wp_nonce_field('syncmaster_save_margin'); ?>
+                                                <input type="hidden" name="action" value="syncmaster_save_margin">
+                                                <input type="hidden" name="sku" value="<?php echo esc_attr($item['sku']); ?>">
+                                                <label>
+                                                    <span class="syncmaster-muted"><?php echo esc_html__('Margin %', 'syncmaster'); ?></span>
+                                                    <input type="number" name="margin_percent" min="0.01" step="0.01" value="<?php echo esc_attr($margin_percent); ?>">
+                                                </label>
+                                                <button type="submit" class="button">
+                                                    <?php echo esc_html__('Save Margin', 'syncmaster'); ?>
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </div>
+                                    <div class="syncmaster-color-panel" id="<?php echo esc_attr($panel_id); ?>">
+                                        <?php if (empty($colors)) : ?>
+                                            <p class="syncmaster-muted"><?php echo esc_html__('No color data found.', 'syncmaster'); ?></p>
+                                        <?php else : ?>
+                                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                                                <?php wp_nonce_field('syncmaster_save_colors'); ?>
+                                                <input type="hidden" name="action" value="syncmaster_save_colors">
+                                                <input type="hidden" name="sku" value="<?php echo esc_attr($item['sku']); ?>">
+                                                <div class="syncmaster-color-grid">
+                                                    <?php foreach ($colors as $color) : ?>
+                                                        <?php
+                                                        $color_name = $color['colorName'] ?? '';
+                                                        $image_url = $color['colorFrontImage'] ?? '';
+                                                        if ($image_url !== '' && strpos($image_url, 'http') !== 0) {
+                                                            $image_url = 'https://cdn.ssactivewear.com/' . ltrim($image_url, '/');
+                                                        }
+                                                        $is_checked = !$has_color_selection || in_array($color_name, $selected_colors, true);
+                                                        ?>
+                                                        <label class="syncmaster-color-card">
+                                                            <span class="syncmaster-color-toggle">
+                                                                <input type="checkbox" name="syncmaster_colors[]" value="<?php echo esc_attr($color_name); ?>" <?php checked($is_checked); ?>>
+                                                                <?php echo esc_html__('Include', 'syncmaster'); ?>
+                                                            </span>
+                                                            <?php if ($image_url) : ?>
+                                                                <img src="<?php echo esc_url($image_url); ?>" alt="<?php echo esc_attr($color_name); ?>">
+                                                            <?php endif; ?>
+                                                            <div>
+                                                                <strong><?php echo esc_html($color_name); ?></strong>
+                                                                <span class="syncmaster-muted"><?php echo esc_html($color['colorCode']); ?></span>
+                                                                <?php
+                                                                $size_names = $color['sizeNames'] ?? array();
+                                                                if (!empty($size_names)) :
+                                                                    $size_list = implode(', ', array_map('sanitize_text_field', $size_names));
+                                                                    ?>
+                                                                    <span class="syncmaster-muted"><?php echo esc_html($size_list); ?></span>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        </label>
+                                                    <?php endforeach; ?>
+                                                </div>
+                                                <button type="submit" class="button syncmaster-save-colors">
+                                                    <?php echo esc_html__('Save Color Preferences', 'syncmaster'); ?>
+                                                </button>
+                                            </form>
+                                        <?php endif; ?>
+                                    </div>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </details>
+                <?php endforeach; ?>
             <?php endif; ?>
         </section>
     <?php endif; ?>
