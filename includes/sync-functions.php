@@ -643,54 +643,63 @@ function syncmaster_process_sync_batch() {
         return;
     }
 
-    $offset = isset($job['offset']) ? (int) $job['offset'] : 0;
-    $total = isset($job['total']) ? (int) $job['total'] : 0;
-    $batch_size = 1;
+    $batch_size = 10;
+    $max_batches_per_run = 20;
+    $batches_processed = 0;
 
-    if ($offset >= $total) {
-        delete_option('syncmaster_active_sync_job');
-        return;
-    }
-
-    $results = syncmaster_sync_monitored_products($batch_size, $offset, array(
-        'mode' => sanitize_text_field($job['mode'] ?? 'full'),
-        'explicit_queue' => isset($job['explicit_queue']) && is_array($job['explicit_queue']) ? $job['explicit_queue'] : array(),
-    ));
-    $processed = (int) ($results['processed'] ?? 0);
-    if ($processed <= 0) {
-        $processed = $batch_size;
-    }
-
-    $job['offset'] = min($offset + $processed, $total);
-    $job['success'] = (int) ($job['success'] ?? 0) + (int) ($results['success'] ?? 0);
-    $job['fail'] = (int) ($job['fail'] ?? 0) + (int) ($results['fail'] ?? 0);
-    $job['created'] = (int) ($job['created'] ?? 0) + (int) ($results['created'] ?? 0);
-    $job['updated'] = (int) ($job['updated'] ?? 0) + (int) ($results['updated'] ?? 0);
-    update_option('syncmaster_active_sync_job', $job, false);
-
-    if ($job['offset'] < $total) {
-        wp_schedule_single_event(time() + 1, 'syncmaster_process_sync_batch');
-        if (function_exists('spawn_cron')) {
-            spawn_cron();
+    while ($batches_processed < $max_batches_per_run) {
+        $offset = isset($job['offset']) ? (int) $job['offset'] : 0;
+        $total = isset($job['total']) ? (int) $job['total'] : 0;
+        if ($offset >= $total) {
+            syncmaster_finalize_background_sync_job($job, $total);
+            return;
         }
-        return;
+
+        $results = syncmaster_sync_monitored_products($batch_size, $offset, array(
+            'mode' => sanitize_text_field($job['mode'] ?? 'full'),
+            'explicit_queue' => isset($job['explicit_queue']) && is_array($job['explicit_queue']) ? $job['explicit_queue'] : array(),
+        ));
+        $processed = (int) ($results['processed'] ?? 0);
+        if ($processed <= 0) {
+            $processed = $batch_size;
+        }
+
+        $job['offset'] = min($offset + $processed, $total);
+        $job['success'] = (int) ($job['success'] ?? 0) + (int) ($results['success'] ?? 0);
+        $job['fail'] = (int) ($job['fail'] ?? 0) + (int) ($results['fail'] ?? 0);
+        $job['created'] = (int) ($job['created'] ?? 0) + (int) ($results['created'] ?? 0);
+        $job['updated'] = (int) ($job['updated'] ?? 0) + (int) ($results['updated'] ?? 0);
+        update_option('syncmaster_active_sync_job', $job, false);
+
+        $batches_processed++;
+        if ($job['offset'] >= $total) {
+            syncmaster_finalize_background_sync_job($job, $total);
+            return;
+        }
     }
 
+    wp_schedule_single_event(time() + 1, 'syncmaster_process_sync_batch');
+    if (function_exists('spawn_cron')) {
+        spawn_cron();
+    }
+}
+
+function syncmaster_finalize_background_sync_job($job, $total) {
     delete_option('syncmaster_active_sync_job');
     $started_at = isset($job['started_at']) ? (int) $job['started_at'] : time();
     update_option('syncmaster_last_sync_run_ts', $started_at);
-    update_option('syncmaster_last_sync_status', $job['fail'] > 0 ? 'error' : 'success');
+    update_option('syncmaster_last_sync_status', ((int) ($job['fail'] ?? 0)) > 0 ? 'error' : 'success');
     syncmaster_write_log(
-        $job['fail'] > 0 ? 'error' : 'success',
-        $job['fail'] > 0 ? __('Background sync completed with errors.', 'syncmaster') : __('Background sync completed.', 'syncmaster'),
-        (int) $job['success'],
-        (int) $job['fail'],
+        ((int) ($job['fail'] ?? 0)) > 0 ? 'error' : 'success',
+        ((int) ($job['fail'] ?? 0)) > 0 ? __('Background sync completed with errors.', 'syncmaster') : __('Background sync completed.', 'syncmaster'),
+        (int) ($job['success'] ?? 0),
+        (int) ($job['fail'] ?? 0),
         array(
             'source' => sanitize_text_field($job['source'] ?? 'unknown'),
             'started_at' => gmdate('c', $started_at),
-            'queue_total' => $total,
-            'created' => (int) $job['created'],
-            'updated' => (int) $job['updated'],
+            'queue_total' => (int) $total,
+            'created' => (int) ($job['created'] ?? 0),
+            'updated' => (int) ($job['updated'] ?? 0),
         )
     );
 }
