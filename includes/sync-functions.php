@@ -431,9 +431,37 @@ function syncmaster_handle_save_categories() {
 
     update_option('syncmaster_category_sync_rules', $rules);
     delete_transient('syncmaster_selected_category_style_ids');
+    $category_style_ids = syncmaster_get_selected_category_style_ids();
+    if (!empty($category_style_ids)) {
+        syncmaster_add_skus_to_monitored_products($category_style_ids);
+    }
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&products_tab=categories&categories_saved=1'));
     exit;
+}
+
+function syncmaster_add_skus_to_monitored_products($skus) {
+    if (!is_array($skus) || empty($skus)) {
+        return;
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . SYNCMASTER_PRODUCTS_TABLE;
+
+    foreach ($skus as $sku) {
+        $sku = sanitize_text_field($sku);
+        if ($sku === '') {
+            continue;
+        }
+        $wpdb->replace(
+            $table,
+            array(
+                'sku' => $sku,
+                'created_at' => current_time('mysql'),
+            ),
+            array('%s', '%s')
+        );
+    }
 }
 
 function syncmaster_reschedule_cron() {
