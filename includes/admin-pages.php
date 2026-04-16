@@ -61,7 +61,7 @@ function syncmaster_render_shell($active = 'dashboard', $content = '') {
     );
     $sync_progress = function_exists('syncmaster_get_sync_progress_status')
         ? syncmaster_get_sync_progress_status()
-        : array('active' => false, 'percent' => 0, 'offset' => 0, 'total' => 0, 'success' => 0, 'fail' => 0);
+        : array('active' => false, 'percent' => 0, 'offset' => 0, 'total' => 0, 'processed' => 0, 'success' => 0, 'fail' => 0);
     ?>
     <div class="wrap syncmaster-admin">
         <div class="syncmaster-header">
@@ -112,11 +112,11 @@ function syncmaster_render_shell($active = 'dashboard', $content = '') {
                 <?php
                 if (!empty($sync_progress['active'])) {
                     echo esc_html(sprintf(
-                        __('Sync Progress: %1$d%% (%2$d/%3$d) · Success: %4$d · Fail: %5$d', 'syncmaster'),
+                        __('Sync Success: %1$d%% (%2$d/%3$d successful) · Processed: %4$d/%3$d · Fail: %5$d', 'syncmaster'),
                         (int) ($sync_progress['percent'] ?? 0),
-                        (int) ($sync_progress['offset'] ?? 0),
-                        (int) ($sync_progress['total'] ?? 0),
                         (int) ($sync_progress['success'] ?? 0),
+                        (int) ($sync_progress['total'] ?? 0),
+                        (int) ($sync_progress['processed'] ?? 0),
                         (int) ($sync_progress['fail'] ?? 0)
                     ));
                 } else {
@@ -196,6 +196,10 @@ function syncmaster_render_products() {
     }
 
     $query = isset($_GET['ss_query']) ? sanitize_text_field(wp_unslash($_GET['ss_query'])) : '';
+    $monitored_sync_status = isset($_GET['monitored_sync_status']) ? sanitize_key(wp_unslash($_GET['monitored_sync_status'])) : 'all';
+    if (!in_array($monitored_sync_status, array('all', 'synced', 'unsynced'), true)) {
+        $monitored_sync_status = 'all';
+    }
     $search_results = array();
     if ($query !== '' && $active_tab === 'products') {
         $search_results = syncmaster_ss_search($query);
@@ -382,6 +386,18 @@ function syncmaster_render_products() {
 
         <section class="syncmaster-card">
             <h2><?php echo esc_html__('Monitored Products', 'syncmaster'); ?></h2>
+            <div class="syncmaster-filter-row">
+                <span class="syncmaster-muted"><?php echo esc_html__('Filter by sync status:', 'syncmaster'); ?></span>
+                <a class="button <?php echo $monitored_sync_status === 'all' ? 'button-primary' : ''; ?>" href="<?php echo esc_url(add_query_arg(array('page' => 'syncmaster_products', 'products_tab' => 'products', 'monitored_sync_status' => 'all', 'monitored_page' => 1), admin_url('admin.php'))); ?>">
+                    <?php echo esc_html__('All', 'syncmaster'); ?>
+                </a>
+                <a class="button <?php echo $monitored_sync_status === 'synced' ? 'button-primary' : ''; ?>" href="<?php echo esc_url(add_query_arg(array('page' => 'syncmaster_products', 'products_tab' => 'products', 'monitored_sync_status' => 'synced', 'monitored_page' => 1), admin_url('admin.php'))); ?>">
+                    <?php echo esc_html__('Synced', 'syncmaster'); ?>
+                </a>
+                <a class="button <?php echo $monitored_sync_status === 'unsynced' ? 'button-primary' : ''; ?>" href="<?php echo esc_url(add_query_arg(array('page' => 'syncmaster_products', 'products_tab' => 'products', 'monitored_sync_status' => 'unsynced', 'monitored_page' => 1), admin_url('admin.php'))); ?>">
+                    <?php echo esc_html__('Unsynced', 'syncmaster'); ?>
+                </a>
+            </div>
             <?php if (empty($monitored)) : ?>
                 <p><?php echo esc_html__('No products monitored yet.', 'syncmaster'); ?></p>
             <?php else : ?>
@@ -397,12 +413,12 @@ function syncmaster_render_products() {
                         </span>
                         <div class="syncmaster-pagination-links">
                             <?php if ($monitored_page > 1) : ?>
-                                <a class="button" href="<?php echo esc_url(add_query_arg(array('page' => 'syncmaster_products', 'products_tab' => 'products', 'monitored_page' => $monitored_page - 1), admin_url('admin.php'))); ?>">
+                                <a class="button" href="<?php echo esc_url(add_query_arg(array('page' => 'syncmaster_products', 'products_tab' => 'products', 'monitored_sync_status' => $monitored_sync_status, 'monitored_page' => $monitored_page - 1), admin_url('admin.php'))); ?>">
                                     <?php echo esc_html__('Previous', 'syncmaster'); ?>
                                 </a>
                             <?php endif; ?>
                             <?php if ($monitored_page < $monitored_total_pages) : ?>
-                                <a class="button" href="<?php echo esc_url(add_query_arg(array('page' => 'syncmaster_products', 'products_tab' => 'products', 'monitored_page' => $monitored_page + 1), admin_url('admin.php'))); ?>">
+                                <a class="button" href="<?php echo esc_url(add_query_arg(array('page' => 'syncmaster_products', 'products_tab' => 'products', 'monitored_sync_status' => $monitored_sync_status, 'monitored_page' => $monitored_page + 1), admin_url('admin.php'))); ?>">
                                     <?php echo esc_html__('Next', 'syncmaster'); ?>
                                 </a>
                             <?php endif; ?>
@@ -416,7 +432,16 @@ function syncmaster_render_products() {
                     if ($sku === '') {
                         continue;
                     }
-                    $product_id = function_exists('wc_get_product_id_by_sku') ? wc_get_product_id_by_sku($sku) : 0;
+                    $product_id = function_exists('syncmaster_get_product_id_by_api_sku')
+                        ? (int) syncmaster_get_product_id_by_api_sku($sku)
+                        : (function_exists('wc_get_product_id_by_sku') ? (int) wc_get_product_id_by_sku($sku) : 0);
+                    $is_synced = $product_id > 0;
+                    if ($monitored_sync_status === 'synced' && !$is_synced) {
+                        continue;
+                    }
+                    if ($monitored_sync_status === 'unsynced' && $is_synced) {
+                        continue;
+                    }
                     $product = $product_id ? wc_get_product($product_id) : null;
                     $item_title = ($product && method_exists($product, 'get_name')) ? $product->get_name() : $sku;
 
@@ -432,17 +457,24 @@ function syncmaster_render_products() {
                         'item' => $item,
                         'item_title' => $item_title,
                         'mapped_names' => $mapped_names,
+                        'product_id' => $product_id,
+                        'is_synced' => $is_synced,
                     );
                 }
-                ksort($grouped_monitored, SORT_NATURAL | SORT_FLAG_CASE);
-                $monitored_total_groups = count($grouped_monitored);
-                $monitored_total_pages = max(1, (int) ceil($monitored_total_groups / $monitored_groups_per_page));
-                if ($monitored_page > $monitored_total_pages) {
-                    $monitored_page = $monitored_total_pages;
+                if (!empty($grouped_monitored)) {
+                    ksort($grouped_monitored, SORT_NATURAL | SORT_FLAG_CASE);
+                    $monitored_total_groups = count($grouped_monitored);
+                    $monitored_total_pages = max(1, (int) ceil($monitored_total_groups / $monitored_groups_per_page));
+                    if ($monitored_page > $monitored_total_pages) {
+                        $monitored_page = $monitored_total_pages;
+                    }
+                    $monitored_group_offset = ($monitored_page - 1) * $monitored_groups_per_page;
+                    $grouped_monitored = array_slice($grouped_monitored, $monitored_group_offset, $monitored_groups_per_page, true);
                 }
-                $monitored_group_offset = ($monitored_page - 1) * $monitored_groups_per_page;
-                $grouped_monitored = array_slice($grouped_monitored, $monitored_group_offset, $monitored_groups_per_page, true);
                 ?>
+                <?php if (empty($grouped_monitored)) : ?>
+                    <p><?php echo esc_html__('No monitored products match this sync status filter.', 'syncmaster'); ?></p>
+                <?php endif; ?>
                 <?php foreach ($grouped_monitored as $group_name => $group_items) : ?>
                     <?php $group_id = 'syncmaster-group-' . md5($group_name); ?>
                     <details class="syncmaster-monitored-group" open>
@@ -469,6 +501,9 @@ function syncmaster_render_products() {
                                 <?php $item = $group_item['item']; ?>
                                 <?php $item_title = $group_item['item_title']; ?>
                                 <?php $mapped_names = $group_item['mapped_names'] ?? array(); ?>
+                                <?php $product_id = (int) ($group_item['product_id'] ?? 0); ?>
+                                <?php $is_synced = !empty($group_item['is_synced']); ?>
+                                <?php $product_edit_url = $product_id > 0 ? get_edit_post_link($product_id, '') : ''; ?>
                                 <?php $margin_percent = syncmaster_get_margin_percent_for_sku($item['sku'], 50); ?>
                                 <?php $panel_id = 'syncmaster-colors-' . esc_attr($item['sku']); ?>
                                 <li class="syncmaster-monitored-item">
@@ -479,6 +514,14 @@ function syncmaster_render_products() {
                                                 <?php echo esc_html__('Select', 'syncmaster'); ?>
                                             </label>
                                             <strong><?php echo esc_html($item_title); ?></strong>
+                                            <span class="syncmaster-sync-badge <?php echo $is_synced ? 'is-synced' : 'is-unsynced'; ?>">
+                                                <?php echo esc_html($is_synced ? __('SYNCED', 'syncmaster') : __('UNSYNCED', 'syncmaster')); ?>
+                                            </span>
+                                            <?php if ($is_synced && $product_edit_url) : ?>
+                                                <a class="syncmaster-product-link" href="<?php echo esc_url($product_edit_url); ?>">
+                                                    <?php echo esc_html__('View Product', 'syncmaster'); ?>
+                                                </a>
+                                            <?php endif; ?>
                                             <span class="syncmaster-muted">
                                                 <?php
                                                 $woo_category_label = !empty($mapped_names)
