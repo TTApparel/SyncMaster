@@ -1713,9 +1713,6 @@ function syncmaster_get_selected_category_style_map() {
     }
     set_transient($cache_key, $style_map, 15 * MINUTE_IN_SECONDS);
 
-    return $style_map;
-}
-
     foreach ($style_map as $style_id => $category_ids) {
         $style_map[$style_id] = array_values(array_unique(array_filter(array_map('sanitize_text_field', $category_ids))));
     }
@@ -1733,18 +1730,31 @@ function syncmaster_get_mapped_product_category_names($category_name, $category_
     }
 
     foreach ($category_ids as $category_id) {
-        $category_id = sanitize_text_field($category_id);
-        if ($category_id === '') {
+        $normalized_category_id = sanitize_text_field($category_id);
+        if ($normalized_category_id === '') {
             continue;
         }
-        $rule = isset($rules[$category_id]) && is_array($rules[$category_id]) ? $rules[$category_id] : array();
-        $rule_mode = isset($rule['mode']) ? $rule['mode'] : '';
-        if (!empty($rule['enabled']) && $rule_mode === 'existing' && !empty($rule['target_term_id'])) {
+
+        if (!isset($rules[$normalized_category_id]) || !is_array($rules[$normalized_category_id])) {
+            continue;
+        }
+
+        $rule = $rules[$normalized_category_id];
+        if (empty($rule['enabled'])) {
+            continue;
+        }
+
+        $rule_mode = isset($rule['mode']) ? sanitize_key($rule['mode']) : '';
+        if ($rule_mode === 'existing' && !empty($rule['target_term_id'])) {
             $term = get_term((int) $rule['target_term_id'], 'product_cat');
             if ($term && !is_wp_error($term)) {
                 $categories[] = $term->name;
                 continue;
             }
+        }
+
+        if (!empty($rule['new_name'])) {
+            $categories[] = sanitize_text_field($rule['new_name']);
         }
 
         if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
