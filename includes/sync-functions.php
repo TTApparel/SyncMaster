@@ -85,6 +85,262 @@ function syncmaster_get_margin_percent_for_sku($sku, $default = 50) {
     return (float) $default;
 }
 
+function syncmaster_get_ss_api_headers() {
+    $headers = array(
+        'Accept' => 'application/json',
+        'Content-Type' => 'application/json',
+    );
+
+    $username = get_option('ss_username', '');
+    $password = get_option('ss_password', '');
+    if ($username !== '' && $password !== '') {
+        $headers['Authorization'] = 'Basic ' . base64_encode($username . ':' . $password);
+    }
+
+    return $headers;
+}
+
+function syncmaster_get_category_sync_rules() {
+    $stored = get_option('syncmaster_category_sync_rules', array());
+    if (!is_array($stored)) {
+        return array();
+    }
+
+    $rules = array();
+    foreach ($stored as $legacy_key => $rule) {
+        $legacy_key = sanitize_text_field($legacy_key);
+        if ($legacy_key === '' || !is_array($rule)) {
+            continue;
+        }
+        $source_id = sanitize_text_field($rule['source_id'] ?? $legacy_key);
+        $source_name = sanitize_text_field($rule['source_name'] ?? $legacy_key);
+        if ($source_id === '') {
+            continue;
+        }
+
+        $mode = ($rule['mode'] ?? '') === 'existing' ? 'existing' : 'create';
+        $rules[$source_id] = array(
+            'enabled' => !empty($rule['enabled']),
+            'mode' => $mode,
+            'target_term_id' => (int) ($rule['target_term_id'] ?? 0),
+            'new_name' => sanitize_text_field($rule['new_name'] ?? ''),
+            'source_name' => $source_name,
+            'source_id' => $source_id,
+        );
+    }
+
+    return $rules;
+}
+
+function syncmaster_fetch_ss_categories() {
+    $cache_key = 'syncmaster_ss_categories_v2';
+    $cached = get_transient($cache_key);
+    if (is_array($cached)) {
+        return $cached;
+    }
+
+    $response = wp_remote_get(SYNCMASTER_CATEGORIES_API_URL, array(
+        'timeout' => 25,
+        'headers' => syncmaster_get_ss_api_headers(),
+    ));
+    if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+        return array();
+    }
+
+    $data = json_decode(wp_remote_retrieve_body($response), true);
+    if (!is_array($data)) {
+        return array();
+    }
+
+    $style_counts = syncmaster_get_style_counts_by_category_id();
+    $categories = array();
+    foreach ($data as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $name = sanitize_text_field(syncmaster_extract_scalar($row['categoryName'] ?? ($row['name'] ?? ($row['CategoryName'] ?? ''))));
+        $category_id = sanitize_text_field(syncmaster_extract_scalar($row['categoryID'] ?? ($row['CategoryID'] ?? ($row['id'] ?? ''))));
+        if ($name === '' || $category_id === '') {
+            continue;
+        }
+
+        $categories[] = array(
+            'id' => $category_id,
+            'name' => $name,
+            'style_count' => (int) ($style_counts[$category_id] ?? 0),
+        );
+    }
+
+    usort($categories, function ($a, $b) {
+        return strcasecmp($a['name'], $b['name']);
+    });
+    set_transient($cache_key, $categories, HOUR_IN_SECONDS);
+
+    return $categories;
+}
+
+function syncmaster_extract_style_category_ids($style_row) {
+    if (!is_array($style_row)) {
+        return array();
+    }
+
+    $raw_categories = $style_row['categories'] ?? ($style_row['Categories'] ?? array());
+    $ids = array();
+
+    if (is_string($raw_categories)) {
+        $parts = preg_split('/[\s,;|]+/', $raw_categories);
+        if (is_array($parts)) {
+            $ids = $parts;
+        }
+    } elseif (is_numeric($raw_categories)) {
+        $ids[] = (string) $raw_categories;
+    } elseif (is_array($raw_categories)) {
+        if (isset($raw_categories['string'])) {
+            $raw_categories = $raw_categories['string'];
+        }
+        foreach ($raw_categories as $value) {
+            $ids[] = syncmaster_extract_scalar($value);
+        }
+    } else {
+        $ids[] = syncmaster_extract_scalar($raw_categories);
+    }
+
+    $normalized = array();
+    foreach ($ids as $id) {
+        $id = sanitize_text_field((string) $id);
+        if ($id !== '') {
+            $normalized[] = $id;
+        }
+    }
+
+    return array_values(array_unique($normalized));
+}
+
+function syncmaster_normalize_style_category_rows($decoded_payload) {
+    if (!is_array($decoded_payload)) {
+        return array();
+    }
+
+    if (isset($decoded_payload['Style'])) {
+        $decoded_payload = $decoded_payload['Style'];
+    } elseif (isset($decoded_payload['ArrayOfStyle']['Style'])) {
+        $decoded_payload = $decoded_payload['ArrayOfStyle']['Style'];
+    }
+
+    if (!isset($decoded_payload[0])) {
+        $decoded_payload = array($decoded_payload);
+    }
+
+    $rows = array();
+    foreach ($decoded_payload as $row) {
+        if (is_array($row)) {
+            $rows[] = $row;
+        }
+    }
+
+    return $rows;
+}
+
+function syncmaster_fetch_style_category_index() {
+    $cache_key = 'syncmaster_style_category_index_v2';
+    $cached = get_transient($cache_key);
+    if (is_array($cached)) {
+        return $cached;
+    }
+
+    $headers = syncmaster_get_ss_api_headers();
+    $all_styles = array();
+    $page = 1;
+    $page_size = 500;
+    $max_pages = 200;
+    $last_page_signature = '';
+
+    while ($page <= $max_pages) {
+        $endpoint = add_query_arg(
+            array(
+                'fields' => 'categories,styleID',
+                'page' => $page,
+                'pageSize' => $page_size,
+            ),
+            SYNCMASTER_STYLES_API_URL
+        );
+        $response = wp_remote_get($endpoint, array(
+            'timeout' => 45,
+            'headers' => $headers,
+        ));
+        if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+            $all_styles = array();
+            break;
+        }
+
+        $body = wp_remote_retrieve_body($response);
+        $decoded = syncmaster_parse_api_response($body);
+        $chunk = syncmaster_normalize_style_category_rows($decoded);
+        if (empty($chunk)) {
+            break;
+        }
+
+        foreach ($chunk as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $style_id = sanitize_text_field(syncmaster_extract_scalar($row['styleID'] ?? ($row['StyleID'] ?? '')));
+            if ($style_id === '') {
+                continue;
+            }
+            $category_ids = syncmaster_extract_style_category_ids($row);
+            $all_styles[] = array(
+                'style_id' => $style_id,
+                'category_ids' => $category_ids,
+            );
+        }
+
+        $first_style = isset($chunk[0]) && is_array($chunk[0]) ? syncmaster_extract_scalar($chunk[0]['styleID'] ?? ($chunk[0]['StyleID'] ?? '')) : '';
+        $last_row = end($chunk);
+        $last_style = is_array($last_row) ? syncmaster_extract_scalar($last_row['styleID'] ?? ($last_row['StyleID'] ?? '')) : '';
+        $current_signature = md5((string) $first_style . '|' . (string) $last_style . '|' . count($chunk));
+        if ($page > 1 && $current_signature === $last_page_signature) {
+            break;
+        }
+        $last_page_signature = $current_signature;
+
+        if (count($chunk) < $page_size) {
+            break;
+        }
+
+        $page++;
+    }
+
+    set_transient($cache_key, $all_styles, 15 * MINUTE_IN_SECONDS);
+    return $all_styles;
+}
+
+function syncmaster_get_style_counts_by_category_id() {
+    $styles = syncmaster_fetch_style_category_index();
+    if (empty($styles)) {
+        return array();
+    }
+
+    $counts = array();
+    foreach ($styles as $style) {
+        if (!is_array($style) || empty($style['category_ids']) || !is_array($style['category_ids'])) {
+            continue;
+        }
+        foreach ($style['category_ids'] as $category_id) {
+            $category_id = sanitize_text_field($category_id);
+            if ($category_id === '') {
+                continue;
+            }
+            if (!isset($counts[$category_id])) {
+                $counts[$category_id] = 0;
+            }
+            $counts[$category_id]++;
+        }
+    }
+
+    return $counts;
+}
+
 function syncmaster_handle_save_settings() {
     if (!current_user_can('manage_options')) {
         wp_die(__('Unauthorized', 'syncmaster'));
@@ -136,6 +392,92 @@ function syncmaster_handle_save_margin() {
     exit;
 }
 
+function syncmaster_handle_save_categories() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_save_categories');
+
+    $posted_rows = $_POST['syncmaster_categories'] ?? array();
+    $categories_lookup_by_name = array();
+    foreach (syncmaster_fetch_ss_categories() as $category_row) {
+        if (!is_array($category_row)) {
+            continue;
+        }
+        $lookup_name = sanitize_text_field($category_row['name'] ?? '');
+        $lookup_id = sanitize_text_field($category_row['id'] ?? '');
+        if ($lookup_name !== '' && $lookup_id !== '') {
+            $categories_lookup_by_name[$lookup_name] = $lookup_id;
+        }
+    }
+    $rules = array();
+    if (is_array($posted_rows)) {
+        foreach ($posted_rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $source_name = sanitize_text_field(wp_unslash($row['source_name'] ?? ''));
+            $source_id = sanitize_text_field(wp_unslash($row['source_id'] ?? ''));
+            if ($source_id === '' && $source_name !== '' && isset($categories_lookup_by_name[$source_name])) {
+                $source_id = $categories_lookup_by_name[$source_name];
+            }
+            if ($source_name === '' || $source_id === '') {
+                continue;
+            }
+
+            $mode = sanitize_key(wp_unslash($row['mode'] ?? 'create'));
+            if (!in_array($mode, array('create', 'existing'), true)) {
+                $mode = 'create';
+            }
+
+            $rules[$source_id] = array(
+                'enabled' => !empty($row['enabled']),
+                'mode' => $mode,
+                'target_term_id' => (int) ($row['target_term_id'] ?? 0),
+                'new_name' => sanitize_text_field(wp_unslash($row['new_name'] ?? '')),
+                'source_name' => $source_name,
+                'source_id' => $source_id,
+            );
+        }
+    }
+
+    update_option('syncmaster_category_sync_rules', $rules);
+    delete_transient('syncmaster_selected_category_style_ids');
+    $category_style_ids = syncmaster_get_selected_category_style_ids();
+    if (!empty($category_style_ids)) {
+        syncmaster_add_skus_to_monitored_products($category_style_ids);
+    }
+
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&products_tab=categories&categories_saved=1'));
+    exit;
+}
+
+function syncmaster_add_skus_to_monitored_products($skus) {
+    if (!is_array($skus) || empty($skus)) {
+        return;
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . SYNCMASTER_PRODUCTS_TABLE;
+
+    foreach ($skus as $sku) {
+        $sku = sanitize_text_field($sku);
+        if ($sku === '') {
+            continue;
+        }
+        $wpdb->replace(
+            $table,
+            array(
+                'sku' => $sku,
+                'created_at' => current_time('mysql'),
+            ),
+            array('%s', '%s')
+        );
+    }
+}
+
 function syncmaster_reschedule_cron() {
     wp_clear_scheduled_hook('syncmaster_cron_sync');
     syncmaster_schedule_cron();
@@ -148,16 +490,75 @@ function syncmaster_handle_sync_now() {
 
     check_admin_referer('syncmaster_sync_now');
 
-    syncmaster_write_log('info', __('Manual sync triggered.', 'syncmaster'), 0, 0, array('source' => 'manual'));
-    syncmaster_run_sync_placeholder('manual');
+    $force_restart = !empty($_POST['force_restart']);
+    syncmaster_start_background_sync('manual', array('mode' => 'full', 'force_restart' => $force_restart));
 
-    wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&synced=1'));
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
+    exit;
+}
+
+function syncmaster_handle_sync_selected_products() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_sync_selected_products');
+    $force_restart = !empty($_POST['force_restart']);
+    $posted_skus = $_POST['skus'] ?? array();
+    $selected_skus = array();
+    if (is_array($posted_skus)) {
+        foreach ($posted_skus as $sku_value) {
+            $sku = sanitize_text_field(wp_unslash($sku_value));
+            if ($sku !== '') {
+                $selected_skus[] = $sku;
+            }
+        }
+    }
+    $selected_skus = array_values(array_unique($selected_skus));
+    if (!empty($selected_skus)) {
+        syncmaster_start_background_sync('manual_selected', array(
+            'mode' => 'full',
+            'explicit_queue' => $selected_skus,
+            'force_restart' => $force_restart,
+        ));
+    }
+
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
+    exit;
+}
+
+function syncmaster_handle_sync_inventory_variations() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    $force_restart = !empty($_POST['force_restart']);
+    check_admin_referer('syncmaster_sync_inventory_variations');
+    syncmaster_start_background_sync('manual_inventory_variations', array(
+        'mode' => 'inventory_variations_only',
+        'force_restart' => $force_restart,
+    ));
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
+    exit;
+}
+
+function syncmaster_handle_sync_new_products() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    $force_restart = !empty($_POST['force_restart']);
+    check_admin_referer('syncmaster_sync_new_products');
+    syncmaster_start_background_sync('manual_new_products', array(
+        'mode' => 'new_only',
+        'force_restart' => $force_restart,
+    ));
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_dashboard&sync_queued=1'));
     exit;
 }
 
 function syncmaster_run_scheduled_sync() {
-    syncmaster_write_log('info', __('Scheduled sync triggered.', 'syncmaster'), 0, 0, array('source' => 'cron'));
-    syncmaster_run_sync_placeholder('cron');
+    syncmaster_start_background_sync('cron', array('mode' => 'full'));
 }
 
 function syncmaster_run_sync_placeholder($source = 'unknown') {
@@ -180,6 +581,150 @@ function syncmaster_run_sync_placeholder($source = 'unknown') {
             'updated' => $results['updated'],
         )
     );
+}
+
+function syncmaster_start_background_sync($source = 'unknown', $options = array()) {
+    $force_restart = !empty($options['force_restart']);
+    $active_job = get_option('syncmaster_active_sync_job');
+    if ($active_job) {
+        if ($force_restart) {
+            delete_option('syncmaster_active_sync_job');
+            syncmaster_write_log('info', __('Active sync job was stopped and replaced by a new request.', 'syncmaster'), 0, 0, array(
+                'source' => sanitize_text_field($source),
+            ));
+        } else {
+            syncmaster_write_log('info', __('Sync request ignored: a sync job is already running.', 'syncmaster'), 0, 0, array(
+                'source' => sanitize_text_field($source),
+            ));
+            return;
+        }
+    }
+
+    $queue = syncmaster_get_current_sync_queue($options);
+    $total = isset($queue['sync_queue']) && is_array($queue['sync_queue']) ? count($queue['sync_queue']) : 0;
+    if ($total === 0) {
+        syncmaster_write_log('info', __('Sync skipped: no products in the current queue.', 'syncmaster'), 0, 0, array(
+            'source' => sanitize_text_field($source),
+        ));
+        return;
+    }
+
+    update_option('syncmaster_active_sync_job', array(
+        'source' => sanitize_text_field($source),
+        'started_at' => time(),
+        'offset' => 0,
+        'total' => $total,
+        'success' => 0,
+        'fail' => 0,
+        'created' => 0,
+        'updated' => 0,
+        'mode' => sanitize_text_field($options['mode'] ?? 'full'),
+        'explicit_queue' => isset($options['explicit_queue']) && is_array($options['explicit_queue'])
+            ? array_values(array_unique(array_map('sanitize_text_field', $options['explicit_queue'])))
+            : array(),
+    ), false);
+
+    syncmaster_write_log('info', __('Background sync queued.', 'syncmaster'), 0, 0, array(
+        'source' => sanitize_text_field($source),
+        'queue_total' => $total,
+    ));
+
+    if (!wp_next_scheduled('syncmaster_process_sync_batch')) {
+        wp_schedule_single_event(time() + 1, 'syncmaster_process_sync_batch');
+    }
+}
+
+function syncmaster_process_sync_batch() {
+    $job = get_option('syncmaster_active_sync_job', array());
+    if (!is_array($job) || empty($job)) {
+        return;
+    }
+
+    $offset = isset($job['offset']) ? (int) $job['offset'] : 0;
+    $total = isset($job['total']) ? (int) $job['total'] : 0;
+    $batch_size = 20;
+
+    if ($offset >= $total) {
+        delete_option('syncmaster_active_sync_job');
+        return;
+    }
+
+    $results = syncmaster_sync_monitored_products($batch_size, $offset, array(
+        'mode' => sanitize_text_field($job['mode'] ?? 'full'),
+        'explicit_queue' => isset($job['explicit_queue']) && is_array($job['explicit_queue']) ? $job['explicit_queue'] : array(),
+    ));
+    $processed = (int) ($results['processed'] ?? 0);
+    if ($processed <= 0) {
+        $processed = $batch_size;
+    }
+
+    $job['offset'] = min($offset + $processed, $total);
+    $job['success'] = (int) ($job['success'] ?? 0) + (int) ($results['success'] ?? 0);
+    $job['fail'] = (int) ($job['fail'] ?? 0) + (int) ($results['fail'] ?? 0);
+    $job['created'] = (int) ($job['created'] ?? 0) + (int) ($results['created'] ?? 0);
+    $job['updated'] = (int) ($job['updated'] ?? 0) + (int) ($results['updated'] ?? 0);
+    update_option('syncmaster_active_sync_job', $job, false);
+
+    if ($job['offset'] < $total) {
+        wp_schedule_single_event(time() + 2, 'syncmaster_process_sync_batch');
+        return;
+    }
+
+    delete_option('syncmaster_active_sync_job');
+    $started_at = isset($job['started_at']) ? (int) $job['started_at'] : time();
+    update_option('syncmaster_last_sync_run_ts', $started_at);
+    update_option('syncmaster_last_sync_status', $job['fail'] > 0 ? 'error' : 'success');
+    syncmaster_write_log(
+        $job['fail'] > 0 ? 'error' : 'success',
+        $job['fail'] > 0 ? __('Background sync completed with errors.', 'syncmaster') : __('Background sync completed.', 'syncmaster'),
+        (int) $job['success'],
+        (int) $job['fail'],
+        array(
+            'source' => sanitize_text_field($job['source'] ?? 'unknown'),
+            'started_at' => gmdate('c', $started_at),
+            'queue_total' => $total,
+            'created' => (int) $job['created'],
+            'updated' => (int) $job['updated'],
+        )
+    );
+}
+
+function syncmaster_get_sync_progress_status() {
+    $job = get_option('syncmaster_active_sync_job', array());
+    if (!is_array($job) || empty($job)) {
+        return array(
+            'active' => false,
+            'offset' => 0,
+            'total' => 0,
+            'percent' => 0,
+            'success' => 0,
+            'fail' => 0,
+            'mode' => 'full',
+        );
+    }
+
+    $offset = max(0, (int) ($job['offset'] ?? 0));
+    $total = max(0, (int) ($job['total'] ?? 0));
+    $percent = $total > 0 ? min(100, (int) floor(($offset / $total) * 100)) : 0;
+
+    return array(
+        'active' => true,
+        'offset' => $offset,
+        'total' => $total,
+        'percent' => $percent,
+        'success' => (int) ($job['success'] ?? 0),
+        'fail' => (int) ($job['fail'] ?? 0),
+        'mode' => sanitize_text_field($job['mode'] ?? 'full'),
+    );
+}
+
+function syncmaster_handle_sync_progress() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('message' => __('Unauthorized', 'syncmaster')), 403);
+    }
+
+    check_ajax_referer('syncmaster_sync_progress', 'nonce');
+    wp_send_json_success(syncmaster_get_sync_progress_status());
 }
 
 function syncmaster_maybe_run_interval_sync() {
@@ -1075,27 +1620,123 @@ function syncmaster_sync_variations($product_id, $base_sku, $color_size_map, $co
     return $stats;
 }
 
-function syncmaster_set_product_category($product_id, $category_name) {
-    $category_name = is_string($category_name) ? trim($category_name) : '';
-    if ($category_name === '') {
-        return;
+function syncmaster_get_selected_category_style_ids() {
+    $style_map = syncmaster_get_selected_category_style_map();
+    if (empty($style_map)) {
+        return array();
     }
 
-    $raw_categories = preg_split('/\s*-\s*/', $category_name);
-    $categories = array();
-    foreach ($raw_categories as $category) {
-        $category = trim((string) $category);
-        if ($category !== '') {
-            $categories[] = $category;
+    return array_keys($style_map);
+}
+
+function syncmaster_get_selected_category_style_map() {
+    $cache_key = 'syncmaster_selected_category_style_ids';
+    $cached = get_transient($cache_key);
+    if (is_array($cached)) {
+        return $cached;
+    }
+
+    $rules = syncmaster_get_category_sync_rules();
+    $available_categories = syncmaster_fetch_ss_categories();
+    $name_to_id_map = array();
+    foreach ($available_categories as $category_row) {
+        if (!is_array($category_row)) {
+            continue;
+        }
+        $name = sanitize_text_field($category_row['name'] ?? '');
+        $id = sanitize_text_field($category_row['id'] ?? '');
+        if ($name !== '' && $id !== '') {
+            $name_to_id_map[$name] = $id;
+        }
+    }
+    $enabled_categories = array();
+    foreach ($rules as $source_id => $rule) {
+        if (!empty($rule['enabled'])) {
+            $normalized_source_id = sanitize_text_field($source_id);
+            if (isset($name_to_id_map[$normalized_source_id])) {
+                $normalized_source_id = $name_to_id_map[$normalized_source_id];
+            }
+            $enabled_categories[] = $normalized_source_id;
         }
     }
 
+    if (empty($enabled_categories)) {
+        return array();
+    }
+
+    $data = syncmaster_fetch_style_category_index();
+    if (empty($data)) {
+        return array();
+    }
+
+    $enabled_lookup = array_fill_keys($enabled_categories, true);
+    $style_map = array();
+    foreach ($data as $style) {
+        if (!is_array($style)) {
+            continue;
+        }
+        $style_id = sanitize_text_field($style['style_id'] ?? '');
+        $category_ids = isset($style['category_ids']) && is_array($style['category_ids']) ? $style['category_ids'] : array();
+        if ($style_id === '' || empty($category_ids)) {
+            continue;
+        }
+        foreach ($category_ids as $category_id) {
+            $category_id = sanitize_text_field($category_id);
+            if (isset($enabled_lookup[$category_id])) {
+                if (!isset($style_map[$style_id])) {
+                    $style_map[$style_id] = array();
+                }
+                $style_map[$style_id][] = $category_id;
+            }
+        }
+    }
+
+    foreach ($style_map as $style_id => $category_ids) {
+        $style_map[$style_id] = array_values(array_unique(array_filter(array_map('sanitize_text_field', $category_ids))));
+    }
+    set_transient($cache_key, $style_map, 15 * MINUTE_IN_SECONDS);
+
+    return $style_map;
+}
+
+function syncmaster_get_mapped_product_category_names($category_name, $category_ids = array()) {
+    $rules = syncmaster_get_category_sync_rules();
+    $categories = array();
+
+    if (!is_array($category_ids) || empty($category_ids)) {
+        return array();
+    }
+
+    foreach ($category_ids as $category_id) {
+        $category_id = sanitize_text_field($category_id);
+        if ($category_id === '') {
+            continue;
+        }
+        $rule = $rules[$category_id] ?? array();
+        if (!empty($rule['enabled']) && ($rule['mode'] ?? '') === 'existing' && !empty($rule['target_term_id'])) {
+            $term = get_term((int) $rule['target_term_id'], 'product_cat');
+            if ($term && !is_wp_error($term)) {
+                $categories[] = $term->name;
+                continue;
+            }
+        }
+
+        if (!empty($rule['enabled']) && !empty($rule['new_name'])) {
+            $categories[] = sanitize_text_field($rule['new_name']);
+        }
+    }
+
+    return array_values(array_unique(array_filter($categories)));
+}
+
+function syncmaster_set_product_category($product_id, $category_name, $category_ids = array()) {
+    $categories = syncmaster_get_mapped_product_category_names($category_name, $category_ids);
     if (empty($categories)) {
         return;
     }
 
     $term_ids = array();
-    foreach (array_unique($categories) as $category) {
+    foreach ($categories as $category) {
         $term = term_exists($category, 'product_cat');
         if (!$term) {
             $term = wp_insert_term($category, 'product_cat');
@@ -1162,9 +1803,52 @@ function syncmaster_set_featured_image($product_id, $image_url) {
     }
 }
 
-function syncmaster_sync_monitored_products() {
+function syncmaster_get_current_sync_queue($options = array()) {
+    ignore_user_abort(true);
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(0);
+    }
+
     $monitored = syncmaster_get_monitored_products();
-    $monitored_count = count($monitored);
+    $monitored_skus = array();
+    foreach ($monitored as $row) {
+        $sku = sanitize_text_field($row['sku'] ?? '');
+        if ($sku !== '') {
+            $monitored_skus[] = $sku;
+        }
+    }
+    $explicit_queue = isset($options['explicit_queue']) && is_array($options['explicit_queue'])
+        ? array_values(array_unique(array_map('sanitize_text_field', $options['explicit_queue'])))
+        : array();
+    $selected_category_style_map = syncmaster_get_selected_category_style_map();
+    $category_skus = array_keys($selected_category_style_map);
+    if (!empty($explicit_queue)) {
+        $sync_queue = $explicit_queue;
+    } else {
+        $sync_queue = !empty($category_skus)
+            ? array_values(array_unique($category_skus))
+            : array_values(array_unique($monitored_skus));
+    }
+    return array(
+        'sync_queue' => $sync_queue,
+        'selected_category_style_map' => $selected_category_style_map,
+        'monitored_skus' => $monitored_skus,
+        'category_skus' => $category_skus,
+    );
+}
+
+function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = array()) {
+    $mode = sanitize_text_field($options['mode'] ?? 'full');
+    $queue_data = syncmaster_get_current_sync_queue($options);
+    $sync_queue = $queue_data['sync_queue'];
+    $selected_category_style_map = $queue_data['selected_category_style_map'];
+    $monitored_skus = $queue_data['monitored_skus'];
+    $category_skus = $queue_data['category_skus'];
+
+    if ($limit > 0) {
+        $sync_queue = array_slice($sync_queue, max(0, (int) $offset), (int) $limit);
+    }
+    $monitored_count = count($sync_queue);
     $color_selections = syncmaster_get_color_selections();
     $color_taxonomy = syncmaster_get_color_taxonomy();
     $size_taxonomy = syncmaster_get_size_taxonomy();
@@ -1185,8 +1869,7 @@ function syncmaster_sync_monitored_products() {
     $updated = 0;
     $fail = 0;
 
-    foreach ($monitored as $item) {
-        $sku = $item['sku'];
+    foreach ($sync_queue as $sku) {
         $api_item = syncmaster_fetch_ss_product($sku);
         if (empty($api_item)) {
             $fail++;
@@ -1209,6 +1892,13 @@ function syncmaster_sync_monitored_products() {
         if (!$product_id && $product_id_by_desired_sku) {
             $product_id = $product_id_by_desired_sku;
             $product_match_source = 'desired_sku';
+        }
+
+        if ($mode === 'new_only' && $product_id) {
+            continue;
+        }
+        if ($mode === 'inventory_variations_only' && !$product_id) {
+            continue;
         }
 
         if ($product_id_by_monitored_sku && $product_id_by_desired_sku && $product_id_by_monitored_sku !== $product_id_by_desired_sku) {
@@ -1320,9 +2010,8 @@ function syncmaster_sync_monitored_products() {
             syncmaster_assign_color_terms($saved_id, $color_term_ids, $color_taxonomy);
             syncmaster_assign_size_terms($saved_id, $size_term_ids, $size_taxonomy);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
-            if (!$product_id) {
-                syncmaster_set_product_category($saved_id, $mapped['category']);
-            }
+            $selected_category_ids_for_style = $selected_category_style_map[$sku] ?? array();
+            syncmaster_set_product_category($saved_id, $mapped['category'], $selected_category_ids_for_style);
             syncmaster_update_threaddesk_product_postbox($saved_id, $color_postbox_view_map);
             if ($mapped['image'] !== '') {
                 syncmaster_set_featured_image($saved_id, $mapped['image']);
@@ -1429,6 +2118,12 @@ function syncmaster_sync_monitored_products() {
         'monitored' => $monitored_count,
         'created' => $created,
         'updated' => $updated,
+        'processed' => $monitored_count,
+        'queue_source_counts' => array(
+            'monitored_products' => count($monitored_skus),
+            'category_styles' => count($category_skus),
+            'active_queue_source' => !empty($category_skus) ? 'categories' : 'monitored_products',
+        ),
     );
 }
 
@@ -1576,10 +2271,16 @@ function syncmaster_get_last_sync_status() {
     return ucfirst($logs[0]['level']);
 }
 
-function syncmaster_get_monitored_products() {
+function syncmaster_get_monitored_products($limit = 0, $offset = 0) {
     global $wpdb;
     $table = $wpdb->prefix . SYNCMASTER_PRODUCTS_TABLE;
-    return $wpdb->get_results("SELECT sku FROM {$table} ORDER BY created_at DESC", ARRAY_A);
+    $sql = "SELECT sku FROM {$table} ORDER BY created_at DESC";
+    $limit = (int) $limit;
+    $offset = max(0, (int) $offset);
+    if ($limit > 0) {
+        $sql = $wpdb->prepare("SELECT sku FROM {$table} ORDER BY created_at DESC LIMIT %d OFFSET %d", $limit, $offset);
+    }
+    return $wpdb->get_results($sql, ARRAY_A);
 }
 
 function syncmaster_get_products_count() {
@@ -1625,6 +2326,38 @@ function syncmaster_handle_remove_sku() {
     }
 
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&removed=1'));
+    exit;
+}
+
+function syncmaster_handle_bulk_remove_skus() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_bulk_remove_skus');
+
+    $posted_skus = $_POST['skus'] ?? array();
+    if (!is_array($posted_skus) || empty($posted_skus)) {
+        wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&removed=0'));
+        exit;
+    }
+
+    global $wpdb;
+    $table = $wpdb->prefix . SYNCMASTER_PRODUCTS_TABLE;
+    $removed_count = 0;
+
+    foreach ($posted_skus as $sku_value) {
+        $sku = sanitize_text_field(wp_unslash($sku_value));
+        if ($sku === '') {
+            continue;
+        }
+        $deleted = $wpdb->delete($table, array('sku' => $sku), array('%s'));
+        if ($deleted) {
+            $removed_count += (int) $deleted;
+        }
+    }
+
+    wp_safe_redirect(admin_url('admin.php?page=syncmaster_products&removed=' . $removed_count));
     exit;
 }
 
@@ -1879,6 +2612,83 @@ function syncmaster_get_style_colors($style_title) {
     return $colors;
 }
 
+function syncmaster_render_colors_panel_markup($sku, $colors) {
+    $sku = sanitize_text_field($sku);
+    $selections = syncmaster_get_color_selections();
+    $has_color_selection = array_key_exists($sku, $selections);
+    $selected_colors = $selections[$sku] ?? array();
+
+    ob_start();
+    if (empty($colors)) :
+        ?>
+        <p class="syncmaster-muted"><?php echo esc_html__('No color data found.', 'syncmaster'); ?></p>
+        <?php
+    else :
+        ?>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('syncmaster_save_colors'); ?>
+            <input type="hidden" name="action" value="syncmaster_save_colors">
+            <input type="hidden" name="sku" value="<?php echo esc_attr($sku); ?>">
+            <div class="syncmaster-color-grid">
+                <?php foreach ($colors as $color) : ?>
+                    <?php
+                    $color_name = $color['colorName'] ?? '';
+                    $image_url = $color['colorFrontImage'] ?? '';
+                    if ($image_url !== '' && strpos($image_url, 'http') !== 0) {
+                        $image_url = 'https://cdn.ssactivewear.com/' . ltrim($image_url, '/');
+                    }
+                    $is_checked = !$has_color_selection || in_array($color_name, $selected_colors, true);
+                    ?>
+                    <label class="syncmaster-color-card">
+                        <span class="syncmaster-color-toggle">
+                            <input type="checkbox" name="syncmaster_colors[]" value="<?php echo esc_attr($color_name); ?>" <?php checked($is_checked); ?>>
+                            <?php echo esc_html__('Include', 'syncmaster'); ?>
+                        </span>
+                        <?php if ($image_url) : ?>
+                            <img src="<?php echo esc_url($image_url); ?>" alt="<?php echo esc_attr($color_name); ?>">
+                        <?php endif; ?>
+                        <div>
+                            <strong><?php echo esc_html($color_name); ?></strong>
+                            <span class="syncmaster-muted"><?php echo esc_html($color['colorCode']); ?></span>
+                            <?php
+                            $size_names = $color['sizeNames'] ?? array();
+                            if (!empty($size_names)) :
+                                $size_list = implode(', ', array_map('sanitize_text_field', $size_names));
+                                ?>
+                                <span class="syncmaster-muted"><?php echo esc_html($size_list); ?></span>
+                            <?php endif; ?>
+                        </div>
+                    </label>
+                <?php endforeach; ?>
+            </div>
+            <button type="submit" class="button syncmaster-save-colors">
+                <?php echo esc_html__('Save Color Preferences', 'syncmaster'); ?>
+            </button>
+        </form>
+        <?php
+    endif;
+
+    return ob_get_clean();
+}
+
+function syncmaster_handle_load_colors_panel() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(array('message' => __('Unauthorized', 'syncmaster')), 403);
+    }
+
+    check_ajax_referer('syncmaster_load_colors_panel', 'nonce');
+
+    $sku = sanitize_text_field(wp_unslash($_POST['sku'] ?? ''));
+    if ($sku === '') {
+        wp_send_json_error(array('message' => __('Missing SKU.', 'syncmaster')), 400);
+    }
+
+    $style = syncmaster_get_style_summary($sku);
+    $colors = syncmaster_get_style_colors($style['title'] ?? $sku);
+    $html = syncmaster_render_colors_panel_markup($sku, $colors);
+    wp_send_json_success(array('html' => $html));
+}
+
 function syncmaster_ss_search($query) {
     $query = strtolower($query);
     $endpoint = add_query_arg(
@@ -1981,3 +2791,4 @@ function syncmaster_handle_test_api() {
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_settings&api_tested=1'));
     exit;
 }
+    $force_restart = !empty($_POST['force_restart']);
