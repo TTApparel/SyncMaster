@@ -416,7 +416,7 @@ function syncmaster_render_products() {
                     if ($sku === '') {
                         continue;
                     }
-                    $product_id = function_exists('wc_get_product_id_by_sku') ? wc_get_product_id_by_sku($sku) : 0;
+                    $product_id = function_exists('wc_get_product_id_by_sku') ? (int) wc_get_product_id_by_sku($sku) : 0;
                     $product = $product_id ? wc_get_product($product_id) : null;
                     $item_title = ($product && method_exists($product, 'get_name')) ? $product->get_name() : $sku;
 
@@ -432,6 +432,8 @@ function syncmaster_render_products() {
                         'item' => $item,
                         'item_title' => $item_title,
                         'mapped_names' => $mapped_names,
+                        'product_id' => $product_id,
+                        'is_synced' => $product_id > 0,
                     );
                 }
                 ksort($grouped_monitored, SORT_NATURAL | SORT_FLAG_CASE);
@@ -469,6 +471,9 @@ function syncmaster_render_products() {
                                 <?php $item = $group_item['item']; ?>
                                 <?php $item_title = $group_item['item_title']; ?>
                                 <?php $mapped_names = $group_item['mapped_names'] ?? array(); ?>
+                                <?php $product_id = (int) ($group_item['product_id'] ?? 0); ?>
+                                <?php $is_synced = !empty($group_item['is_synced']); ?>
+                                <?php $product_edit_url = $product_id > 0 ? get_edit_post_link($product_id, '') : ''; ?>
                                 <?php $margin_percent = syncmaster_get_margin_percent_for_sku($item['sku'], 50); ?>
                                 <?php $panel_id = 'syncmaster-colors-' . esc_attr($item['sku']); ?>
                                 <li class="syncmaster-monitored-item">
@@ -479,6 +484,14 @@ function syncmaster_render_products() {
                                                 <?php echo esc_html__('Select', 'syncmaster'); ?>
                                             </label>
                                             <strong><?php echo esc_html($item_title); ?></strong>
+                                            <span class="syncmaster-sync-badge <?php echo $is_synced ? 'is-synced' : 'is-unsynced'; ?>">
+                                                <?php echo esc_html($is_synced ? __('SYNCED', 'syncmaster') : __('UNSYNCED', 'syncmaster')); ?>
+                                            </span>
+                                            <?php if ($is_synced && $product_edit_url) : ?>
+                                                <a class="syncmaster-product-link" href="<?php echo esc_url($product_edit_url); ?>">
+                                                    <?php echo esc_html__('View Product', 'syncmaster'); ?>
+                                                </a>
+                                            <?php endif; ?>
                                             <span class="syncmaster-muted">
                                                 <?php
                                                 $woo_category_label = !empty($mapped_names)
