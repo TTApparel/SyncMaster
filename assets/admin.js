@@ -82,4 +82,46 @@
             $('<input type="hidden" name="skus[]">').val(sku).appendTo($form);
         });
     });
+
+    $(document).on('click', '.syncmaster-select-all-categories', function () {
+        $('.syncmaster-category-table input[type="checkbox"][name*="[enabled]"]').prop('checked', true);
+    });
+
+    $(document).on('click', '.syncmaster-clear-all-categories', function () {
+        $('.syncmaster-category-table input[type="checkbox"][name*="[enabled]"]').prop('checked', false);
+    });
+
+    $(document).on('submit', '.syncmaster-category-sync-form', function () {
+        var $form = $(this);
+        $form.find('.syncmaster-category-table tbody tr').each(function () {
+            var $row = $(this);
+            var isEnabled = $row.find('input[type="checkbox"][name*="[enabled]"]').is(':checked');
+            if (!isEnabled) {
+                $row.find('input, select, textarea').prop('disabled', true);
+            }
+        });
+    });
+
+    $(document).on('change', '.syncmaster-group-toggle', function () {
+        var target = $(this).data('target');
+        if (!target) {
+            return;
+        }
+        $('#' + target + ' .syncmaster-bulk-sku').prop('checked', $(this).is(':checked'));
+    });
+
+    $(document).on('submit', '#syncmaster-bulk-remove-form', function (event) {
+        var $form = $(this);
+        $form.find('input[name="skus[]"]').remove();
+        var selected = $('.syncmaster-bulk-sku:checked');
+        if (!selected.length) {
+            event.preventDefault();
+            window.alert('Please select at least one monitored product to remove.');
+            return;
+        }
+        selected.each(function () {
+            var sku = $(this).val();
+            $('<input type="hidden" name="skus[]">').val(sku).appendTo($form);
+        });
+    });
 })(jQuery);
