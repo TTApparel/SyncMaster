@@ -212,25 +212,34 @@ function syncmaster_render_products() {
                             <tr>
                                 <th><?php echo esc_html__('Sync', 'syncmaster'); ?></th>
                                 <th><?php echo esc_html__('S&S Category', 'syncmaster'); ?></th>
+                                <th><?php echo esc_html__('Category ID', 'syncmaster'); ?></th>
+                                <th><?php echo esc_html__('Styles', 'syncmaster'); ?></th>
                                 <th><?php echo esc_html__('Destination Type', 'syncmaster'); ?></th>
                                 <th><?php echo esc_html__('Existing Woo Category', 'syncmaster'); ?></th>
                                 <th><?php echo esc_html__('New Woo Category Name', 'syncmaster'); ?></th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($category_index as $category_name) : ?>
+                            <?php foreach ($category_index as $category) : ?>
                                 <?php
-                                $saved_rule = $category_sync_rules[$category_name] ?? array();
+                                $category_name = sanitize_text_field($category['name'] ?? '');
+                                $category_id = sanitize_text_field($category['id'] ?? '');
+                                if ($category_name === '' || $category_id === '') {
+                                    continue;
+                                }
+                                $style_count = (int) ($category['style_count'] ?? 0);
+                                $saved_rule = $category_sync_rules[$category_id] ?? array();
                                 $is_enabled = !empty($saved_rule['enabled']);
                                 $mode = $saved_rule['mode'] ?? 'create';
                                 $target_term_id = (int) ($saved_rule['target_term_id'] ?? 0);
                                 $new_name = $saved_rule['new_name'] ?? $category_name;
-                                $row_key = md5($category_name);
+                                $row_key = md5($category_id);
                                 ?>
                                 <tr>
                                     <td>
                                         <input type="hidden" name="category_rows[]" value="<?php echo esc_attr($row_key); ?>">
                                         <input type="hidden" name="syncmaster_categories[<?php echo esc_attr($row_key); ?>][source_name]" value="<?php echo esc_attr($category_name); ?>">
+                                        <input type="hidden" name="syncmaster_categories[<?php echo esc_attr($row_key); ?>][source_id]" value="<?php echo esc_attr($category_id); ?>">
                                         <label>
                                             <input type="checkbox" name="syncmaster_categories[<?php echo esc_attr($row_key); ?>][enabled]" value="1" <?php checked($is_enabled); ?>>
                                             <?php echo esc_html__('Enable', 'syncmaster'); ?>
@@ -238,6 +247,12 @@ function syncmaster_render_products() {
                                     </td>
                                     <td>
                                         <strong><?php echo esc_html($category_name); ?></strong>
+                                    </td>
+                                    <td>
+                                        <code><?php echo esc_html($category_id); ?></code>
+                                    </td>
+                                    <td>
+                                        <?php echo esc_html($style_count); ?>
                                     </td>
                                     <td>
                                         <select name="syncmaster_categories[<?php echo esc_attr($row_key); ?>][mode]">
