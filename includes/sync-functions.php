@@ -2591,6 +2591,112 @@ function syncmaster_get_products_count() {
     return (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
 }
 
+function syncmaster_get_action_scheduler_status_counts() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'actionscheduler_actions';
+    $table_exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
+    if ($table_exists !== $table) {
+        return array();
+    }
+
+    $rows = $wpdb->get_results("SELECT status, COUNT(*) AS total FROM {$table} GROUP BY status", ARRAY_A);
+    if (!is_array($rows)) {
+        return array();
+    }
+
+    $counts = array();
+    foreach ($rows as $row) {
+        $status = sanitize_key($row['status'] ?? '');
+        if ($status === '') {
+            continue;
+        }
+        $counts[$status] = (int) ($row['total'] ?? 0);
+    }
+
+    ksort($counts);
+    return $counts;
+}
+
+function syncmaster_get_action_scheduler_cleanup_candidates($days = 30) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'actionscheduler_actions';
+    $days = max(1, (int) $days);
+    $threshold_datetime = gmdate('Y-m-d H:i:s', time() - (DAY_IN_SECONDS * $days));
+
+    return (int) $wpdb->get_var(
+        $wpdb->prepare(
+            "SELECT COUNT(*) FROM {$table}
+            WHERE status IN ('complete', 'failed')
+            AND scheduled_date_gmt < %s",
+            $threshold_datetime
+        )
+    );
+}
+
+function syncmaster_run_action_scheduler_cleanup($days = 30, $dry_run = true) {
+    global $wpdb;
+    $table = $wpdb->prefix . 'actionscheduler_actions';
+    $days = max(1, (int) $days);
+    $dry_run = (bool) $dry_run;
+    $threshold_datetime = gmdate('Y-m-d H:i:s', time() - (DAY_IN_SECONDS * $days));
+    $candidate_count = syncmaster_get_action_scheduler_cleanup_candidates($days);
+    $deleted_count = 0;
+    $used_api = false;
+
+    if (!$dry_run && $candidate_count > 0) {
+        if (class_exists('ActionScheduler') && method_exists('ActionScheduler', 'store')) {
+            $store = ActionScheduler::store();
+            if (is_object($store) && method_exists($store, 'delete_action')) {
+                $action_ids = $wpdb->get_col(
+                    $wpdb->prepare(
+                        "SELECT action_id FROM {$table}
+                        WHERE status IN ('complete', 'failed')
+                        AND scheduled_date_gmt < %s
+                        LIMIT 5000",
+                        $threshold_datetime
+                    )
+                );
+                if (is_array($action_ids) && !empty($action_ids)) {
+                    foreach ($action_ids as $action_id) {
+                        $action_id = (int) $action_id;
+                        if ($action_id <= 0) {
+                            continue;
+                        }
+                        try {
+                            $store->delete_action($action_id);
+                            $deleted_count++;
+                        } catch (Exception $e) {
+                            continue;
+                        }
+                    }
+                    $used_api = true;
+                }
+            }
+        }
+
+        if (!$used_api) {
+            $deleted = $wpdb->query(
+                $wpdb->prepare(
+                    "DELETE FROM {$table}
+                    WHERE status IN ('complete', 'failed')
+                    AND scheduled_date_gmt < %s",
+                    $threshold_datetime
+                )
+            );
+            $deleted_count = $deleted ? (int) $deleted : 0;
+        }
+    }
+
+    return array(
+        'days' => $days,
+        'dry_run' => $dry_run,
+        'threshold_datetime' => $threshold_datetime,
+        'candidate_count' => $candidate_count,
+        'deleted_count' => $deleted_count,
+        'used_api' => $used_api,
+    );
+}
+
 function syncmaster_handle_add_sku() {
     if (!current_user_can('manage_options')) {
         wp_die(__('Unauthorized', 'syncmaster'));
@@ -3246,6 +3352,60 @@ function syncmaster_handle_migrate_external_images() {
         ),
         admin_url('admin.php')
     );
+    wp_safe_redirect($redirect_url);
+    exit;
+}
+
+function syncmaster_handle_action_scheduler_cleanup() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_action_scheduler_cleanup');
+
+    $days = isset($_POST['retention_days']) ? (int) $_POST['retention_days'] : 30;
+    if ($days < 1) {
+        $days = 1;
+    }
+    if ($days > 3650) {
+        $days = 3650;
+    }
+
+    $mode = sanitize_key(wp_unslash($_POST['cleanup_mode'] ?? 'preview'));
+    $is_dry_run = $mode !== 'delete';
+    $result = syncmaster_run_action_scheduler_cleanup($days, $is_dry_run);
+
+    syncmaster_write_log(
+        $is_dry_run ? 'info' : 'warning',
+        $is_dry_run
+            ? sprintf(__('Action Scheduler cleanup preview generated for %d day retention.', 'syncmaster'), $days)
+            : sprintf(__('Action Scheduler cleanup executed for %d day retention.', 'syncmaster'), $days),
+        $is_dry_run ? 0 : (int) $result['deleted_count'],
+        0,
+        array(
+            'action' => 'action_scheduler_cleanup',
+            'dry_run' => $is_dry_run,
+            'days' => $days,
+            'threshold_datetime' => $result['threshold_datetime'],
+            'candidate_count' => (int) $result['candidate_count'],
+            'deleted_count' => (int) $result['deleted_count'],
+            'method' => $result['used_api'] ? 'action_scheduler_store_api' : 'sql_fallback',
+        )
+    );
+
+    $redirect_url = add_query_arg(
+        array(
+            'page' => 'syncmaster_settings',
+            'as_cleanup_done' => 1,
+            'as_cleanup_mode' => $is_dry_run ? 'preview' : 'delete',
+            'as_cleanup_days' => (int) $days,
+            'as_cleanup_candidates' => (int) $result['candidate_count'],
+            'as_cleanup_deleted' => (int) $result['deleted_count'],
+            'as_cleanup_method' => $result['used_api'] ? 'api' : 'sql',
+        ),
+        admin_url('admin.php')
+    );
+
     wp_safe_redirect($redirect_url);
     exit;
 }

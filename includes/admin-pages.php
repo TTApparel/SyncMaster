@@ -637,6 +637,13 @@ function syncmaster_render_logs() {
 function syncmaster_render_settings() {
     $options = syncmaster_get_settings();
     $api_test = get_transient('syncmaster_last_api_test');
+    $action_scheduler_counts = syncmaster_get_action_scheduler_status_counts();
+    $retention_days = isset($_GET['as_cleanup_days']) ? max(1, (int) $_GET['as_cleanup_days']) : 30;
+    $cleanup_done = !empty($_GET['as_cleanup_done']);
+    $cleanup_mode = isset($_GET['as_cleanup_mode']) ? sanitize_key(wp_unslash($_GET['as_cleanup_mode'])) : '';
+    $cleanup_candidates = isset($_GET['as_cleanup_candidates']) ? (int) $_GET['as_cleanup_candidates'] : 0;
+    $cleanup_deleted = isset($_GET['as_cleanup_deleted']) ? (int) $_GET['as_cleanup_deleted'] : 0;
+    $cleanup_method = isset($_GET['as_cleanup_method']) ? sanitize_key(wp_unslash($_GET['as_cleanup_method'])) : '';
     $migration_done = !empty($_GET['image_migration_done']);
     $migration_scanned = isset($_GET['image_migration_scanned']) ? (int) $_GET['image_migration_scanned'] : 0;
     $migration_migrated = isset($_GET['image_migration_migrated']) ? (int) $_GET['image_migration_migrated'] : 0;
@@ -656,6 +663,29 @@ function syncmaster_render_settings() {
                     $migration_removed,
                     $migration_failed
                 ));
+                ?>
+            </p>
+        </div>
+    <?php endif; ?>
+    <?php if ($cleanup_done) : ?>
+        <div class="notice <?php echo $cleanup_mode === 'delete' ? 'notice-warning' : 'notice-info'; ?> is-dismissible">
+            <p>
+                <?php
+                if ($cleanup_mode === 'delete') {
+                    echo esc_html(sprintf(
+                        __('Action Scheduler cleanup complete. Deleted %1$d actions older than %2$d days. Candidate count before delete: %3$d. Method: %4$s.', 'syncmaster'),
+                        $cleanup_deleted,
+                        $retention_days,
+                        $cleanup_candidates,
+                        $cleanup_method === 'api' ? __('Action Scheduler API', 'syncmaster') : __('Safe SQL fallback', 'syncmaster')
+                    ));
+                } else {
+                    echo esc_html(sprintf(
+                        __('Action Scheduler dry-run preview complete. %1$d completed/failed actions are older than %2$d days.', 'syncmaster'),
+                        $cleanup_candidates,
+                        $retention_days
+                    ));
+                }
                 ?>
             </p>
         </div>
@@ -745,6 +775,54 @@ function syncmaster_render_settings() {
             <p>
                 <button type="submit" class="button">
                     <?php echo esc_html__('Run Image Migration', 'syncmaster'); ?>
+                </button>
+            </p>
+        </form>
+    </section>
+    <section class="syncmaster-card">
+        <h2><?php echo esc_html__('Admin Utilities · Action Scheduler', 'syncmaster'); ?></h2>
+        <p><?php echo esc_html__('Use this tool to inspect Action Scheduler volume and safely preview or cleanup old completed/failed actions.', 'syncmaster'); ?></p>
+        <?php if (empty($action_scheduler_counts)) : ?>
+            <p><?php echo esc_html__('Action Scheduler table not found. Install/activate required dependencies before using this utility.', 'syncmaster'); ?></p>
+        <?php else : ?>
+            <h3><?php echo esc_html__('Current counts by status', 'syncmaster'); ?></h3>
+            <ul class="syncmaster-logs">
+                <?php foreach ($action_scheduler_counts as $status => $count) : ?>
+                    <li class="syncmaster-log">
+                        <strong><?php echo esc_html($status); ?></strong>
+                        <span><?php echo esc_html(number_format_i18n($count)); ?></span>
+                    </li>
+                <?php endforeach; ?>
+            </ul>
+        <?php endif; ?>
+        <h3><?php echo esc_html__('Recommended retention thresholds', 'syncmaster'); ?></h3>
+        <ul>
+            <li><?php echo esc_html__('Typical stores: 30 days for completed/failed actions.', 'syncmaster'); ?></li>
+            <li><?php echo esc_html__('High-volume stores: 14–21 days if database growth is heavy.', 'syncmaster'); ?></li>
+            <li><?php echo esc_html__('Conservative retention: 60–90 days when longer job history is needed for audits.', 'syncmaster'); ?></li>
+        </ul>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('syncmaster_action_scheduler_cleanup'); ?>
+            <input type="hidden" name="action" value="syncmaster_action_scheduler_cleanup">
+            <div class="syncmaster-field">
+                <label for="syncmaster_retention_days"><?php echo esc_html__('Retention (days)', 'syncmaster'); ?></label>
+                <input type="number" id="syncmaster_retention_days" name="retention_days" min="1" max="3650" value="<?php echo esc_attr($retention_days); ?>">
+            </div>
+            <p class="description">
+                <?php echo esc_html__('Preview shows how many completed/failed actions are older than the retention threshold. Delete removes only those rows.', 'syncmaster'); ?>
+            </p>
+            <p>
+                <button type="submit" class="button" name="cleanup_mode" value="preview">
+                    <?php echo esc_html__('Dry-run Preview', 'syncmaster'); ?>
+                </button>
+                <button
+                    type="submit"
+                    class="button button-secondary"
+                    name="cleanup_mode"
+                    value="delete"
+                    onclick="return window.confirm('<?php echo esc_js(__('Delete old completed/failed Action Scheduler rows now?', 'syncmaster')); ?>');"
+                >
+                    <?php echo esc_html__('Run Cleanup', 'syncmaster'); ?>
                 </button>
             </p>
         </form>
