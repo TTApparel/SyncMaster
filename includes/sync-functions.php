@@ -1463,16 +1463,12 @@ function syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, 
         return;
     }
 
-    require_once ABSPATH . 'wp-admin/includes/file.php';
-    require_once ABSPATH . 'wp-admin/includes/media.php';
-    require_once ABSPATH . 'wp-admin/includes/image.php';
-
     foreach ($candidate_names as $name) {
         $name = sanitize_text_field($name);
         if ($name === '') {
             continue;
         }
-        $image_url = $swatch_map[$name] ?? '';
+        $image_url = esc_url_raw($swatch_map[$name] ?? '');
         if ($image_url === '') {
             continue;
         }
@@ -1484,18 +1480,12 @@ function syncmaster_maybe_update_color_swatch_meta($candidate_names, $taxonomy, 
             continue;
         }
         $term_id = (int) $term->term_id;
-        $existing = get_term_meta($term_id, 'smart-swatches-framework--src', true);
-        if (!empty($existing)) {
+        $existing = esc_url_raw((string) get_term_meta($term_id, 'smart-swatches-framework--src', true));
+        if ($existing === $image_url) {
             continue;
         }
-        $attachment_id = media_sideload_image($image_url, 0, null, 'id');
-        if (is_wp_error($attachment_id)) {
-            continue;
-        }
-        $attachment_url = wp_get_attachment_url($attachment_id);
-        if ($attachment_url) {
-            update_term_meta($term_id, 'smart-swatches-framework--src', esc_url_raw($attachment_url));
-        }
+
+        update_term_meta($term_id, 'smart-swatches-framework--src', $image_url);
     }
 }
 
