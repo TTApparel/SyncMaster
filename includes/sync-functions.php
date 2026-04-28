@@ -10,7 +10,17 @@ function syncmaster_get_settings() {
         'ss_password' => get_option('ss_password', ''),
         'sync_interval_minutes' => (int) get_option('sync_interval_minutes', 60),
         'syncmaster_enable_interval_fallback' => (int) get_option('syncmaster_enable_interval_fallback', 0),
+        'syncmaster_automatic_sync_mode' => syncmaster_get_automatic_sync_mode(),
     );
+}
+
+function syncmaster_get_automatic_sync_mode() {
+    $mode = sanitize_text_field(get_option('syncmaster_automatic_sync_mode', 'inventory_variations_only'));
+    if (!in_array($mode, array('inventory_variations_only', 'new_only'), true)) {
+        $mode = 'inventory_variations_only';
+    }
+
+    return $mode;
 }
 
 function syncmaster_get_color_selections() {
@@ -354,7 +364,12 @@ function syncmaster_handle_save_settings() {
         'ss_password' => sanitize_text_field(wp_unslash($_POST['ss_password'] ?? '')),
         'sync_interval_minutes' => (int) ($_POST['sync_interval_minutes'] ?? 60),
         'syncmaster_enable_interval_fallback' => !empty($_POST['syncmaster_enable_interval_fallback']) ? 1 : 0,
+        'syncmaster_automatic_sync_mode' => sanitize_text_field(wp_unslash($_POST['syncmaster_automatic_sync_mode'] ?? 'inventory_variations_only')),
     );
+
+    if (!in_array($settings['syncmaster_automatic_sync_mode'], array('inventory_variations_only', 'new_only'), true)) {
+        $settings['syncmaster_automatic_sync_mode'] = 'inventory_variations_only';
+    }
 
     foreach ($settings as $key => $value) {
         update_option($key, $value);
@@ -560,7 +575,7 @@ function syncmaster_handle_sync_new_products() {
 }
 
 function syncmaster_run_scheduled_sync() {
-    syncmaster_start_background_sync('cron', array('mode' => 'full'));
+    syncmaster_start_background_sync('cron', array('mode' => syncmaster_get_automatic_sync_mode()));
 }
 
 function syncmaster_run_sync_placeholder($source = 'unknown') {
@@ -581,6 +596,7 @@ function syncmaster_run_sync_placeholder($source = 'unknown') {
             'monitored' => $results['monitored'],
             'created' => $results['created'],
             'updated' => $results['updated'],
+            'skipped_unchanged' => (int) ($results['skipped_unchanged'] ?? 0),
         )
     );
 }
@@ -620,6 +636,7 @@ function syncmaster_start_background_sync($source = 'unknown', $options = array(
         'fail' => 0,
         'created' => 0,
         'updated' => 0,
+        'skipped_unchanged' => 0,
         'mode' => sanitize_text_field($options['mode'] ?? 'full'),
         'explicit_queue' => array_values($queue['sync_queue']),
     ), false);
@@ -671,6 +688,7 @@ function syncmaster_process_sync_batch() {
         $job['fail'] = (int) ($job['fail'] ?? 0) + (int) ($results['fail'] ?? 0);
         $job['created'] = (int) ($job['created'] ?? 0) + (int) ($results['created'] ?? 0);
         $job['updated'] = (int) ($job['updated'] ?? 0) + (int) ($results['updated'] ?? 0);
+        $job['skipped_unchanged'] = (int) ($job['skipped_unchanged'] ?? 0) + (int) ($results['skipped_unchanged'] ?? 0);
         update_option('syncmaster_active_sync_job', $job, false);
 
         $batches_processed++;
@@ -702,6 +720,7 @@ function syncmaster_finalize_background_sync_job($job, $total) {
             'queue_total' => (int) $total,
             'created' => (int) ($job['created'] ?? 0),
             'updated' => (int) ($job['updated'] ?? 0),
+            'skipped_unchanged' => (int) ($job['skipped_unchanged'] ?? 0),
         )
     );
 }
@@ -785,7 +804,7 @@ function syncmaster_maybe_run_interval_sync() {
         'last_run' => $last_run,
         'interval_seconds' => $interval_seconds,
     ));
-    syncmaster_start_background_sync('interval_fallback', array('mode' => 'full'));
+    syncmaster_start_background_sync('interval_fallback', array('mode' => syncmaster_get_automatic_sync_mode()));
     delete_transient($lock_key);
 }
 
@@ -1397,7 +1416,7 @@ function syncmaster_collect_color_postbox_view_map($colors, $selected_colors = a
 
 function syncmaster_update_threaddesk_product_postbox($product_id, $color_postbox_view_map) {
     if (!$product_id || empty($color_postbox_view_map) || !is_array($color_postbox_view_map)) {
-        return;
+        return false;
     }
 
     $existing = get_post_meta($product_id, 'tta_threaddesk_product_postbox', true);
@@ -1444,7 +1463,12 @@ function syncmaster_update_threaddesk_product_postbox($product_id, $color_postbo
         $postbox['colors'][$color_slug] = $current;
     }
 
+    if (wp_json_encode($existing) === wp_json_encode($postbox)) {
+        return false;
+    }
+
     update_post_meta($product_id, 'tta_threaddesk_product_postbox', $postbox);
+    return true;
 }
 
 function syncmaster_collect_color_swatch_map($colors) {
@@ -1934,12 +1958,18 @@ function syncmaster_set_external_image_url($product_id, $image_url) {
     }
 
     $image_url = syncmaster_normalize_ss_image_url($image_url);
+    $existing_image_url = syncmaster_normalize_ss_image_url(get_post_meta($product_id, '_syncmaster_external_image_url', true));
+    if ($existing_image_url === $image_url) {
+        return false;
+    }
+
     if ($image_url === '') {
         delete_post_meta($product_id, '_syncmaster_external_image_url');
-        return;
+        return true;
     }
 
     update_post_meta($product_id, '_syncmaster_external_image_url', esc_url_raw($image_url));
+    return true;
 }
 
 function syncmaster_get_current_sync_queue($options = array()) {
@@ -2041,6 +2071,7 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
 
     $created = 0;
     $updated = 0;
+    $skipped_unchanged = 0;
     $fail = 0;
 
     foreach ($sync_queue as $sku) {
@@ -2171,7 +2202,61 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
                 $product->set_price($simple_price);
             }
         }
-        $saved_id = $product->save();
+        $saved_id = 0;
+        $product_changes = $product->get_changes();
+        $has_product_changes = !$product_id || !empty($product_changes);
+        $has_global_id_changes = !$product_id || sanitize_text_field((string) get_post_meta($product_id, '_global_unique_id', true)) !== $sku;
+        $has_external_image_changes = true;
+        if ($product_id) {
+            $current_external_image = syncmaster_normalize_ss_image_url(get_post_meta($product_id, '_syncmaster_external_image_url', true));
+            $next_external_image = syncmaster_normalize_ss_image_url($mapped['image']);
+            $has_external_image_changes = $current_external_image !== $next_external_image;
+        }
+        $has_postbox_changes = true;
+        if ($product_id) {
+            $existing_postbox = get_post_meta($product_id, 'tta_threaddesk_product_postbox', true);
+            $next_postbox = is_array($existing_postbox) ? $existing_postbox : array();
+            $next_postbox['colors'] = isset($next_postbox['colors']) && is_array($next_postbox['colors']) ? $next_postbox['colors'] : array();
+            foreach ($color_postbox_view_map as $color_slug => $views) {
+                $color_slug = sanitize_title($color_slug);
+                if ($color_slug === '' || !is_array($views)) {
+                    continue;
+                }
+                $front_image = esc_url_raw($views['front'] ?? '');
+                $back_image = esc_url_raw($views['back'] ?? '');
+                $side_image = esc_url_raw($views['side'] ?? '');
+                if ($front_image === '' && $back_image === '' && $side_image === '') {
+                    continue;
+                }
+                $current_color = $next_postbox['colors'][$color_slug] ?? array();
+                if (!is_array($current_color)) {
+                    $current_color = array();
+                }
+                if ($front_image !== '') {
+                    $current_color['front_image'] = $front_image;
+                    $current_color['front_fallback_url'] = $front_image;
+                }
+                if ($back_image !== '') {
+                    $current_color['back_image'] = $back_image;
+                    $current_color['back_fallback_url'] = $back_image;
+                }
+                if ($side_image !== '') {
+                    $current_color['side_image'] = $side_image;
+                    $current_color['side_fallback_url'] = $side_image;
+                }
+                if (empty($current_color['side_label']) || !in_array($current_color['side_label'], array('left', 'right'), true)) {
+                    $current_color['side_label'] = 'left';
+                }
+                $next_postbox['colors'][$color_slug] = $current_color;
+            }
+            $has_postbox_changes = wp_json_encode($existing_postbox) !== wp_json_encode($next_postbox);
+        }
+        $skip_product_save = $product_id && !$has_product_changes && !$has_global_id_changes && !$has_external_image_changes && !$has_postbox_changes;
+        if ($skip_product_save) {
+            $saved_id = (int) $product_id;
+        } else {
+            $saved_id = $product->save();
+        }
 
         $variation_stats = array(
             'created' => 0,
@@ -2182,7 +2267,9 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
         );
 
         if ($saved_id) {
-            syncmaster_set_product_global_identifier($saved_id, $sku);
+            if ($has_global_id_changes || !$product_id) {
+                syncmaster_set_product_global_identifier($saved_id, $sku);
+            }
             syncmaster_assign_color_terms($saved_id, $color_term_ids, $color_taxonomy);
             syncmaster_assign_size_terms($saved_id, $size_term_ids, $size_taxonomy);
             syncmaster_apply_product_brand($saved_id, $product, $mapped['brand']);
@@ -2223,7 +2310,26 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
         }
 
         if ($saved_id) {
-            if ($product_id) {
+            if ($product_id && $skip_product_save) {
+                $skipped_unchanged++;
+                syncmaster_write_log(
+                    'info',
+                    sprintf(__('Skipped SKU %s: unchanged data (no product save needed).', 'syncmaster'), $sku),
+                    0,
+                    0,
+                    array(
+                        'sku' => $sku,
+                        'product_id' => (int) $saved_id,
+                        'mode' => $mode,
+                        'change_flags' => array(
+                            'product' => (bool) $has_product_changes,
+                            'global_id' => (bool) $has_global_id_changes,
+                            'external_image' => (bool) $has_external_image_changes,
+                            'postbox' => (bool) $has_postbox_changes,
+                        ),
+                    )
+                );
+            } elseif ($product_id) {
                 $updated++;
             } else {
                 $created++;
@@ -2246,6 +2352,7 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
                     'inventory_qty_total' => syncmaster_calculate_simple_inventory_qty($color_size_qty_map),
                     'variations_target_count' => array_sum(array_map('count', $color_size_map)),
                     'variation_stats' => $variation_stats,
+                    'skip_product_save' => $skip_product_save,
                     'existing_color_term_ids' => $existing_color_term_ids,
                     'resolved_color_term_ids' => $color_term_ids,
                     'selected_colors' => $selected_colors,
@@ -2292,6 +2399,7 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
         'monitored' => $monitored_count,
         'created' => $created,
         'updated' => $updated,
+        'skipped_unchanged' => $skipped_unchanged,
         'processed' => $monitored_count,
         'queue_source_counts' => array(
             'monitored_products' => count($monitored_skus),
