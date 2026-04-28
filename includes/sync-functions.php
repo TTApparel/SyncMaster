@@ -9,6 +9,7 @@ function syncmaster_get_settings() {
         'ss_username' => get_option('ss_username', ''),
         'ss_password' => get_option('ss_password', ''),
         'sync_interval_minutes' => (int) get_option('sync_interval_minutes', 60),
+        'syncmaster_enable_interval_fallback' => (int) get_option('syncmaster_enable_interval_fallback', 0),
     );
 }
 
@@ -352,6 +353,7 @@ function syncmaster_handle_save_settings() {
         'ss_username' => sanitize_text_field(wp_unslash($_POST['ss_username'] ?? '')),
         'ss_password' => sanitize_text_field(wp_unslash($_POST['ss_password'] ?? '')),
         'sync_interval_minutes' => (int) ($_POST['sync_interval_minutes'] ?? 60),
+        'syncmaster_enable_interval_fallback' => !empty($_POST['syncmaster_enable_interval_fallback']) ? 1 : 0,
     );
 
     foreach ($settings as $key => $value) {
@@ -748,6 +750,10 @@ function syncmaster_handle_sync_progress() {
 }
 
 function syncmaster_maybe_run_interval_sync() {
+    if (!(bool) get_option('syncmaster_enable_interval_fallback', 0)) {
+        return;
+    }
+
     if (wp_doing_cron() || wp_doing_ajax()) {
         return;
     }
