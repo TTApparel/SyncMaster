@@ -1931,6 +1931,21 @@ function syncmaster_set_featured_image($product_id, $image_url) {
     }
 }
 
+function syncmaster_set_external_image_url($product_id, $image_url) {
+    $product_id = (int) $product_id;
+    if ($product_id <= 0) {
+        return;
+    }
+
+    $image_url = syncmaster_normalize_ss_image_url($image_url);
+    if ($image_url === '') {
+        delete_post_meta($product_id, '_syncmaster_external_image_url');
+        return;
+    }
+
+    update_post_meta($product_id, '_syncmaster_external_image_url', esc_url_raw($image_url));
+}
+
 function syncmaster_get_current_sync_queue($options = array()) {
     ignore_user_abort(true);
     if (function_exists('set_time_limit')) {
@@ -2178,9 +2193,7 @@ function syncmaster_sync_monitored_products($limit = 0, $offset = 0, $options = 
             $selected_category_ids_for_style = $selected_category_style_map[$sku] ?? array();
             syncmaster_set_product_category($saved_id, $mapped['category'], $selected_category_ids_for_style);
             syncmaster_update_threaddesk_product_postbox($saved_id, $color_postbox_view_map);
-            if ($mapped['image'] !== '') {
-                syncmaster_set_featured_image($saved_id, $mapped['image']);
-            }
+            syncmaster_set_external_image_url($saved_id, $mapped['image']);
             if ($is_variable) {
                 $variation_stats = syncmaster_sync_variations(
                     $saved_id,
@@ -2329,7 +2342,27 @@ function syncmaster_get_external_image_url($product) {
     return esc_url($image_url);
 }
 
+function syncmaster_is_external_image_preferred($product = null) {
+    $preferred = false;
+
+    if ($product && is_a($product, 'WC_Product')) {
+        $product_preference = get_post_meta($product->get_id(), '_syncmaster_external_image_preferred', true);
+        $preferred = in_array($product_preference, array('1', 'yes', 'true', 'on'), true);
+    }
+
+    if (!$preferred) {
+        $option_preference = get_option('syncmaster_external_image_preferred', '0');
+        $preferred = in_array((string) $option_preference, array('1', 'yes', 'true', 'on'), true);
+    }
+
+    return (bool) apply_filters('syncmaster_external_image_preferred', $preferred, $product);
+}
+
 function syncmaster_render_external_product_image($image, $product, $size, $attr, $placeholder) {
+    if ($product && is_a($product, 'WC_Product') && $product->get_image_id() && !syncmaster_is_external_image_preferred($product)) {
+        return $image;
+    }
+
     $image_url = syncmaster_get_external_image_url($product);
     if ($image_url === '') {
         return $image;
