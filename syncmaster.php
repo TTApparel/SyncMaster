@@ -63,6 +63,7 @@ add_action('admin_post_syncmaster_test_api', 'syncmaster_handle_test_api');
 add_action('admin_post_syncmaster_save_colors', 'syncmaster_handle_save_colors');
 add_action('admin_post_syncmaster_save_margin', 'syncmaster_handle_save_margin');
 add_action('admin_post_syncmaster_save_categories', 'syncmaster_handle_save_categories');
+add_action('admin_post_syncmaster_migrate_external_images', 'syncmaster_handle_migrate_external_images');
 add_action('wp_ajax_syncmaster_load_colors_panel', 'syncmaster_handle_load_colors_panel');
 add_action('wp_ajax_syncmaster_sync_progress', 'syncmaster_handle_sync_progress');
 

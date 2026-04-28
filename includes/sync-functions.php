@@ -2979,4 +2979,159 @@ function syncmaster_handle_test_api() {
     wp_safe_redirect(admin_url('admin.php?page=syncmaster_settings&api_tested=1'));
     exit;
 }
-    $force_restart = !empty($_POST['force_restart']);
+
+function syncmaster_collect_migration_image_candidates($product_id) {
+    $candidates = array();
+
+    $style_image = syncmaster_normalize_ss_image_url(get_post_meta($product_id, '_syncmaster_style_image', true));
+    if ($style_image !== '') {
+        $candidates[] = $style_image;
+    }
+
+    $postbox = get_post_meta($product_id, 'tta_threaddesk_product_postbox', true);
+    $postbox_colors = is_array($postbox) && isset($postbox['colors']) && is_array($postbox['colors'])
+        ? $postbox['colors']
+        : array();
+    foreach ($postbox_colors as $views) {
+        if (!is_array($views)) {
+            continue;
+        }
+
+        $postbox_image = syncmaster_normalize_ss_image_url(
+            $views['front_image'] ?? ($views['front_fallback_url'] ?? ($views['back_image'] ?? ($views['back_fallback_url'] ?? '')))
+        );
+        if ($postbox_image !== '') {
+            $candidates[] = $postbox_image;
+        }
+    }
+
+    $variation_ids = get_posts(array(
+        'post_type' => 'product_variation',
+        'post_parent' => (int) $product_id,
+        'post_status' => array('publish', 'private', 'draft', 'pending', 'future'),
+        'fields' => 'ids',
+        'numberposts' => -1,
+    ));
+    foreach ($variation_ids as $variation_id) {
+        $variation_image = syncmaster_normalize_ss_image_url(get_post_meta((int) $variation_id, '_syncmaster_external_image_url', true));
+        if ($variation_image !== '') {
+            $candidates[] = $variation_image;
+        }
+    }
+
+    return array_values(array_unique(array_filter($candidates)));
+}
+
+function syncmaster_migrate_external_image_urls($remove_thumbnail = false) {
+    $query = new WP_Query(array(
+        'post_type' => 'product',
+        'post_status' => array('publish', 'private', 'draft', 'pending', 'future'),
+        'posts_per_page' => -1,
+        'fields' => 'ids',
+        'meta_query' => array(
+            'relation' => 'AND',
+            array(
+                'key' => '_global_unique_id',
+                'compare' => 'EXISTS',
+            ),
+            array(
+                'relation' => 'OR',
+                array(
+                    'key' => '_syncmaster_style_image',
+                    'compare' => 'EXISTS',
+                ),
+                array(
+                    'key' => 'tta_threaddesk_product_postbox',
+                    'compare' => 'EXISTS',
+                ),
+            ),
+        ),
+    ));
+
+    $results = array(
+        'scanned' => 0,
+        'migrated' => 0,
+        'thumbnail_removed' => 0,
+        'failed' => 0,
+        'skipped_no_source' => 0,
+        'errors' => array(),
+    );
+
+    foreach ($query->posts as $product_id) {
+        $product_id = (int) $product_id;
+        $results['scanned']++;
+
+        $candidates = syncmaster_collect_migration_image_candidates($product_id);
+        $external_image_url = $candidates[0] ?? '';
+        if ($external_image_url === '') {
+            $results['failed']++;
+            $results['skipped_no_source']++;
+            $results['errors'][] = array(
+                'product_id' => $product_id,
+                'reason' => 'missing_image_source',
+            );
+            continue;
+        }
+
+        syncmaster_set_external_image_url($product_id, $external_image_url);
+        $results['migrated']++;
+
+        if ($remove_thumbnail) {
+            $thumbnail_id = (int) get_post_thumbnail_id($product_id);
+            if ($thumbnail_id > 0) {
+                delete_post_thumbnail($product_id);
+                $results['thumbnail_removed']++;
+            }
+        }
+    }
+
+    return $results;
+}
+
+function syncmaster_handle_migrate_external_images() {
+    if (!current_user_can('manage_options')) {
+        wp_die(__('Unauthorized', 'syncmaster'));
+    }
+
+    check_admin_referer('syncmaster_migrate_external_images');
+
+    $remove_thumbnail = !empty($_POST['syncmaster_migration_remove_thumbnail']);
+    $results = syncmaster_migrate_external_image_urls($remove_thumbnail);
+    $has_failures = ((int) $results['failed']) > 0;
+
+    syncmaster_write_log(
+        $has_failures ? 'error' : 'info',
+        sprintf(
+            __('Manual image migration completed. Scanned: %1$d, migrated: %2$d, thumbnail removed: %3$d, failed: %4$d.', 'syncmaster'),
+            (int) $results['scanned'],
+            (int) $results['migrated'],
+            (int) $results['thumbnail_removed'],
+            (int) $results['failed']
+        ),
+        (int) $results['migrated'],
+        (int) $results['failed'],
+        array(
+            'action' => 'manual_external_image_migration',
+            'remove_thumbnail' => $remove_thumbnail,
+            'scanned' => (int) $results['scanned'],
+            'migrated' => (int) $results['migrated'],
+            'thumbnail_removed' => (int) $results['thumbnail_removed'],
+            'skipped_no_source' => (int) $results['skipped_no_source'],
+            'errors' => array_slice($results['errors'], 0, 50),
+        )
+    );
+
+    $redirect_url = add_query_arg(
+        array(
+            'page' => 'syncmaster_settings',
+            'image_migration_done' => 1,
+            'image_migration_scanned' => (int) $results['scanned'],
+            'image_migration_migrated' => (int) $results['migrated'],
+            'image_migration_removed' => (int) $results['thumbnail_removed'],
+            'image_migration_failed' => (int) $results['failed'],
+        ),
+        admin_url('admin.php')
+    );
+    wp_safe_redirect($redirect_url);
+    exit;
+}
