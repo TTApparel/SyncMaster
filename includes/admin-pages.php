@@ -678,6 +678,16 @@ function syncmaster_render_settings() {
                 <label for="sync_interval_minutes"><?php echo esc_html__('Sync Interval (minutes)', 'syncmaster'); ?></label>
                 <input type="number" id="sync_interval_minutes" name="sync_interval_minutes" min="5" value="<?php echo esc_attr($options['sync_interval_minutes']); ?>">
             </div>
+            <div class="syncmaster-field">
+                <label for="syncmaster_enable_interval_fallback"><?php echo esc_html__('Enable interval fallback sync', 'syncmaster'); ?></label>
+                <label>
+                    <input type="checkbox" id="syncmaster_enable_interval_fallback" name="syncmaster_enable_interval_fallback" value="1" <?php checked(!empty($options['syncmaster_enable_interval_fallback'])); ?>>
+                    <?php echo esc_html__('Run an init-based fallback checker when WordPress receives traffic.', 'syncmaster'); ?>
+                </label>
+                <p class="description">
+                    <?php echo esc_html__('Primary automation should remain the scheduled syncmaster_cron_sync WP-Cron event. Enable this fallback only when WP-Cron reliability is limited. Running both mechanisms can increase background job volume.', 'syncmaster'); ?>
+                </p>
+            </div>
             <button type="submit" class="button button-primary">
                 <?php echo esc_html__('Save Settings', 'syncmaster'); ?>
             </button>
