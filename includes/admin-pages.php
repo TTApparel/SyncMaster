@@ -688,6 +688,20 @@ function syncmaster_render_settings() {
                     <?php echo esc_html__('Primary automation should remain the scheduled syncmaster_cron_sync WP-Cron event. Enable this fallback only when WP-Cron reliability is limited. Running both mechanisms can increase background job volume.', 'syncmaster'); ?>
                 </p>
             </div>
+            <div class="syncmaster-field">
+                <label for="syncmaster_automatic_sync_mode"><?php echo esc_html__('Automatic sync mode', 'syncmaster'); ?></label>
+                <select id="syncmaster_automatic_sync_mode" name="syncmaster_automatic_sync_mode">
+                    <option value="inventory_variations_only" <?php selected(($options['syncmaster_automatic_sync_mode'] ?? 'inventory_variations_only'), 'inventory_variations_only'); ?>>
+                        <?php echo esc_html__('Inventory + variations only (existing products)', 'syncmaster'); ?>
+                    </option>
+                    <option value="new_only" <?php selected(($options['syncmaster_automatic_sync_mode'] ?? ''), 'new_only'); ?>>
+                        <?php echo esc_html__('New products only', 'syncmaster'); ?>
+                    </option>
+                </select>
+                <p class="description">
+                    <?php echo esc_html__('Used by scheduled and interval-fallback automation. Full sync remains manual-only.', 'syncmaster'); ?>
+                </p>
+            </div>
             <button type="submit" class="button button-primary">
                 <?php echo esc_html__('Save Settings', 'syncmaster'); ?>
             </button>
