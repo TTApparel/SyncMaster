@@ -637,9 +637,29 @@ function syncmaster_render_logs() {
 function syncmaster_render_settings() {
     $options = syncmaster_get_settings();
     $api_test = get_transient('syncmaster_last_api_test');
+    $migration_done = !empty($_GET['image_migration_done']);
+    $migration_scanned = isset($_GET['image_migration_scanned']) ? (int) $_GET['image_migration_scanned'] : 0;
+    $migration_migrated = isset($_GET['image_migration_migrated']) ? (int) $_GET['image_migration_migrated'] : 0;
+    $migration_removed = isset($_GET['image_migration_removed']) ? (int) $_GET['image_migration_removed'] : 0;
+    $migration_failed = isset($_GET['image_migration_failed']) ? (int) $_GET['image_migration_failed'] : 0;
 
     ob_start();
     ?>
+    <?php if ($migration_done) : ?>
+        <div class="notice <?php echo $migration_failed > 0 ? 'notice-warning' : 'notice-success'; ?> is-dismissible">
+            <p>
+                <?php
+                echo esc_html(sprintf(
+                    __('Image migration completed. Scanned: %1$d, migrated: %2$d, thumbnail removed: %3$d, failed: %4$d.', 'syncmaster'),
+                    $migration_scanned,
+                    $migration_migrated,
+                    $migration_removed,
+                    $migration_failed
+                ));
+                ?>
+            </p>
+        </div>
+    <?php endif; ?>
     <section class="syncmaster-card">
         <h2><?php echo esc_html__('Settings', 'syncmaster'); ?></h2>
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="syncmaster-settings">
@@ -687,6 +707,23 @@ function syncmaster_render_settings() {
                 <?php endif; ?>
             </div>
         <?php endif; ?>
+    </section>
+    <section class="syncmaster-card">
+        <h2><?php echo esc_html__('Manual Image Migration', 'syncmaster'); ?></h2>
+        <p><?php echo esc_html__('Safely backfill external image URLs from existing synced image data. This runs only when triggered manually.', 'syncmaster'); ?></p>
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+            <?php wp_nonce_field('syncmaster_migrate_external_images'); ?>
+            <input type="hidden" name="action" value="syncmaster_migrate_external_images">
+            <label>
+                <input type="checkbox" name="syncmaster_migration_remove_thumbnail" value="1">
+                <?php echo esc_html__('Also remove featured images (_thumbnail_id) so storefront prefers external image URLs.', 'syncmaster'); ?>
+            </label>
+            <p>
+                <button type="submit" class="button">
+                    <?php echo esc_html__('Run Image Migration', 'syncmaster'); ?>
+                </button>
+            </p>
+        </form>
     </section>
     <?php
     $content = ob_get_clean();
